@@ -9,19 +9,39 @@ using Tailscale.Core.Protocol;
 namespace Tailscale.Core.Control
 {
     /// <summary>
-    /// Il canale reale verso il control server: HTTP/1.1 sopra i frame Noise.
+    /// Il canale reale verso il control server: HTTP/2 sopra i frame Noise.
+    ///
+    /// La sequenza, come nel client Go (`SetUnencryptedHTTP2` in
+    /// control/ts2021/client.go): dopo l'handshake Noise il server puo' mandare un
+    /// early payload e poi parla HTTP/2. Il corpo della netmap e' una sequenza di
+    /// messaggi prefissati da una lunghezza uint32 *little-endian*
+    /// (`readMapResponseMessage` in control/controlclient/direct.go), non JSON
+    /// concatenato: senza il prefisso ogni confine di messaggio e' indovinato.
     ///
     /// Il watchdog e' quello del client Go: se non arriva nulla per due minuti (su
-    /// uno stream che altrimenti resterebbe aperto per giorni) la connessione viene
-    /// chiusa, cosi' il chiamante la rifa'. Senza di esso un server che smette di
-    /// rispondere lascerebbe la lettura bloccata per sempre e l'app "connessa" ma
-    /// morta.
+    /// uno stream che altrimenti resterebbe aperto per giorni) la connessione
+    /// viene chiusa, cosi' il chiamante la rifa'. Senza di esso un server che
+    /// smette di rispondere lascerebbe la lettura bloccata per sempre e l'app
+    /// "connessa" ma morta.
     /// </summary>
     public sealed class NoiseControlConnection : IControlConnection
     {
+        /// <summary>Lo stesso tetto del client Go per un corpo di risposta: 1 MiB.</summary>
+        public const int MaxBodyBytes = 1 << 20;
+
+        /// <summary>
+        /// Tetto per un singolo messaggio della netmap. Il riferimento ammette
+        /// fino a 256 MiB; il traffico reale arriva a 16 MiB, e su un telefono un
+        /// messaggio oltre quello e' piu' probabilmente un bug del server che un
+        /// dato da leggere, quindi si segnala invece di allocarlo.
+        /// </summary>
+        public const int MaxMapMessageBytes = 16 << 20;
+
         private readonly NoiseTransport _transport;
-        private readonly NoiseFrameStream _stream;
+        private readonly NoiseFrameStream _frames;
+        private readonly PushbackStream _stream;
         private readonly ILogSink _log;
+        private Http2Connection _http2;
         private bool _broken;
 
         public NoiseControlConnection(NoiseTransport transport, ILogSink log)
@@ -29,7 +49,8 @@ namespace Tailscale.Core.Control
             if (transport == null) throw new ArgumentNullException("transport");
             _transport = transport;
             _log = log ?? NullLogSink.Instance;
-            _stream = new NoiseFrameStream(transport, 0);
+            _frames = new NoiseFrameStream(transport, 0);
+            _stream = new PushbackStream(_frames);
         }
 
         public bool IsBroken
@@ -37,89 +58,149 @@ namespace Tailscale.Core.Control
             get { return _broken || _transport == null; }
         }
 
+        /// <summary>
+        /// Il client HTTP/2, creato alla prima richiesta: e' il momento in cui si
+        /// legge l'eventuale early payload, perche' prima dell'handshake quei byte
+        /// non possono ancora essere arrivati.
+        /// </summary>
+        private Http2Connection Http2()
+        {
+            if (_http2 == null)
+            {
+                string json;
+                if (EarlyPayload.TryConsume(_stream, _log, out json))
+                    _log.Log("canale di controllo: early payload letto (" + (json == null ? 0 : json.Length) + " byte)");
+
+                _http2 = new Http2Connection(_stream, _log);
+            }
+            return _http2;
+        }
+
         public ControlResponse Post(string path, string jsonBody, List<KeyValuePair<string, string>> headers)
         {
-            _log.Log("http: POST " + path + " (" + (jsonBody == null ? 0 : jsonBody.Length)
-                     + " byte, " + (headers == null ? 0 : headers.Count) + " header)");
-            HttpOverNoise.WriteRequest(_stream, "POST", path, "controlplane.tailscale.com", jsonBody, headers);
+            byte[] body = jsonBody == null ? new byte[0] : Ascii.GetBytes(jsonBody);
+            _log.Log("http: POST " + path + " (" + body.Length + " byte, "
+                     + (headers == null ? 0 : headers.Count) + " header aggiuntivi)");
 
-            HttpBodyResponse response;
+            Http2Response response;
             try
             {
-                response = HttpOverNoise.ReadResponse(_stream);
-                _log.Log("http: " + path + " -> " + response.StatusCode + " " + response.ReasonPhrase
-                         + ", " + (response.Body == null ? 0 : response.Body.Length) + " byte");
+                response = Http2().Post(path, body, headers);
             }
             catch (IOException ex)
             {
-                _log.Log("http: " + path + " chiusa senza risposta (" + ex.Message + ")");
-                // Il control server parla HTTP/2 dentro Noise (il client Go forza
-                // `SetUnencryptedHTTP2`), quindi una richiesta HTTP/1.1 viene chiusa
-                // senza risposta. L'errore grezzo sarebbe "stream chiuso dopo 0 di 3
-                // byte": qui si dice cosa manca davvero.
+                _log.Log("http: " + path + " interrotta (" + ex.Message + ")");
                 throw new ControlStreamException(
-                    "il server ha chiuso la richiesta " + path + " senza risposta: il canale di "
-                    + "controllo richiede HTTP/2 dentro il trasporto Noise, non HTTP/1.1 ("
+                    "richiesta " + path + " interrotta: il control server ha chiuso la connessione ("
                     + ex.Message + ")", ex);
+            }
+
+            string text;
+            try
+            {
+                text = Http2Connection.ReadBody(response.Body, MaxBodyBytes);
+            }
+            catch (Http2Exception ex)
+            {
+                _log.Log("http: " + path + " -> " + response.StatusCode + ", corpo non leggibile: " + ex.Message);
+                throw new ControlStreamException("corpo della risposta di " + path + " non leggibile: "
+                    + ex.Message, ex);
+            }
+
+            _log.Log("http: " + path + " -> " + response.StatusCode + ", "
+                     + (text == null ? 0 : text.Length) + " byte");
+            if (response.StatusCode != 200)
+            {
+                // Il corpo di un errore e' la spiegazione del server: senza, un 400
+                // e' un numero e basta.
+                _log.Log("http: " + path + " corpo dell'errore = " + Short(text));
             }
 
             ControlResponse result = new ControlResponse();
             result.StatusCode = response.StatusCode;
-            result.Body = response.Body;
+            result.Body = text;
             return result;
         }
 
         /// <summary>
         /// Apre lo stream della netmap e chiama onJson per ogni MapResponse, finche'
         /// lo stream non si chiude o il watchdog non scatta.
-        ///
-        /// Il corpo della risposta sono piu' valori JSON uno dopo l'altro (con
-        /// Transfer-Encoding: chunked), quindi non si puo' leggere "il corpo" e
-        /// interpretarlo: si accumulano byte e si emette ogni valore completo.
         /// </summary>
         public void PostStream(
             string path, string jsonBody, List<KeyValuePair<string, string>> headers,
             Action<string> onJson, int watchdogSeconds)
         {
+            byte[] body = jsonBody == null ? new byte[0] : Ascii.GetBytes(jsonBody);
             _log.Log("map: apro lo stream su " + path + " (watchdog " + watchdogSeconds
-                     + "s, " + (jsonBody == null ? 0 : jsonBody.Length) + " byte)");
-            HttpOverNoise.WriteRequest(_stream, "POST", path, "controlplane.tailscale.com", jsonBody, headers);
+                     + "s, " + body.Length + " byte di richiesta)");
 
-            HttpResponseHead head = RawHttp.ReadResponseHead(_stream);
-            _log.Log("map: risposta \"" + head.StatusLine + "\", "
-                     + head.HeaderCount + " header, transfer-encoding="
-                     + (head.Get("Transfer-Encoding") ?? "assente")
-                     + ", content-length="
-                     + (head.Get("Content-Length") ?? "assente"));
+            Http2Response response = Http2().Post(path, body, headers);
+            _log.Log("map: risposta http " + response.StatusCode + ", content-type="
+                     + (response.ContentType ?? "assente"));
 
-            if (head.StatusCode != 200)
+            if (response.StatusCode != 200)
             {
-                string body = HttpOverNoise.ReadResponse(_stream).Body;
-                _log.Log("map: rifiutata, corpo = " + Trim(body));
-                throw new ControlStreamException(
-                    "map rifiutata: http " + head.StatusCode + " " + Trim(body));
+                string error = Http2Connection.ReadBody(response.Body, MaxBodyBytes);
+                _log.Log("map: rifiutata, corpo = " + Short(error));
+                throw new ControlStreamException("map rifiutata: http " + response.StatusCode
+                    + " " + Short(error));
             }
+
+            Stream stream = response.Body;
+            int messages = 0;
 
             using (Watchdog watchdog = new Watchdog(this, watchdogSeconds))
             {
-                JsonStreamSplitter splitter = new JsonStreamSplitter();
-                byte[] chunk = new byte[4096];
-
                 while (true)
                 {
-                    int read = _stream.Read(chunk, 0, chunk.Length);
-                    if (read <= 0) break;
-                    watchdog.KeepAlive();
-
-                    for (int i = 0; i < read; i++)
+                    byte[] size = new byte[4];
+                    if (!ReadExactly(stream, size, 4))
                     {
-                        string complete = splitter.Feed((char)chunk[i]);
-                        if (complete != null) onJson(complete);
+                        _log.Log("map: lo stream si e' chiuso dopo " + messages + " messaggi");
+                        break;
                     }
+
+                    // Little-endian: e' il byte order che sceglie il control server.
+                    long length = (uint)(size[0] | (size[1] << 8) | (size[2] << 16) | (size[3] << 24));
+                    if (length > MaxMapMessageBytes)
+                    {
+                        _log.Log("map: messaggio di " + length + " byte, oltre il tetto di "
+                                 + MaxMapMessageBytes);
+                        throw new ControlStreamException("messaggio della netmap di " + length
+                            + " byte: oltre il massimo accettato di " + MaxMapMessageBytes);
+                    }
+
+                    byte[] message = new byte[(int)length];
+                    if (!ReadExactly(stream, message, message.Length))
+                        throw new ControlStreamException("messaggio della netmap troncato: attesi "
+                            + length + " byte");
+
+                    watchdog.KeepAlive();
+                    messages++;
+
+                    onJson(Latin1(message));
                 }
             }
 
-            _log.Log("stream della netmap terminato");
+            _log.Log("stream della netmap terminato (" + messages + " messaggi)");
+        }
+
+        /// <summary>Legge esattamente count byte; false se lo stream finisce prima di iniziare.</summary>
+        private bool ReadExactly(Stream stream, byte[] buffer, int count)
+        {
+            int read = 0;
+            while (read < count)
+            {
+                int n = stream.Read(buffer, read, count - read);
+                if (n <= 0)
+                {
+                    if (read == 0) return false;
+                    _log.Log("map: lettura interrotta dopo " + read + " di " + count + " byte");
+                    return false;
+                }
+                read += n;
+            }
+            return true;
         }
 
         /// <summary>Chiude la connessione quando lo stream tace troppo a lungo.</summary>
@@ -161,93 +242,41 @@ namespace Tailscale.Core.Control
             }
         }
 
-        private static string Trim(string text)
+        /// <summary>I byte sono latin-1 (JSON ASCII): non si passa per la codifica di sistema.</summary>
+        private static string Latin1(byte[] bytes)
+        {
+            char[] chars = new char[bytes.Length];
+            for (int i = 0; i < bytes.Length; i++) chars[i] = (char)bytes[i];
+            return new string(chars);
+        }
+
+        private static string Short(string text)
         {
             if (text == null) return "";
             string trimmed = text.Trim();
-            return trimmed.Length <= 200 ? trimmed : trimmed.Substring(0, 200);
+            return trimmed.Length <= 200 ? trimmed : trimmed.Substring(0, 200) + "...";
         }
 
         public void Dispose()
         {
             _log.Log("canale di controllo: chiusura");
             _broken = true;
+            if (_http2 != null)
+            {
+                try { _http2.Dispose(); }
+                catch (Exception ex) { _log.Log("canale di controllo: errore chiudendo http2: " + ex.Message); }
+                _http2 = null;
+            }
             try { _transport.Dispose(); }
             catch (Exception ex) { _log.Log("canale di controllo: errore in chiusura: " + ex.Message); }
         }
     }
 
-    /// <summary>Errore nello stream della netmap.</summary>
+    /// <summary>Errore nello stream della netmap o nel canale di controllo.</summary>
     public class ControlStreamException : Exception
     {
         public ControlStreamException(string message) : base(message) { }
 
         public ControlStreamException(string message, Exception inner) : base(message, inner) { }
-    }
-
-    /// <summary>
-    /// Divide un flusso di byte in valori JSON concatenati.
-    ///
-    /// Non si puo' usare ParsePrefix qui: il confine fra un valore e il successivo
-    /// non e' noto finche' non arriva il byte che chiude il primo, e un tentativo su
-    /// un testo troncato non si distingue da un errore di sintassi. Si conta quindi
-    /// la profondita' di graffe e quadre fuori dalle stringhe, che e' esatto per
-    /// oggetti e array e non richiede di rileggere nulla.
-    /// </summary>
-    public sealed class JsonStreamSplitter
-    {
-        private readonly StringBuilder _current = new StringBuilder();
-        private int _depth;
-        private bool _inString;
-        private bool _escaped;
-
-        /// <summary>Consuma un carattere e restituisce il valore JSON completato, se c'e'.</summary>
-        public string Feed(char c)
-        {
-            if (_depth == 0)
-            {
-                // Fra un valore e il successivo: si ignora tutto tranne l'inizio di un
-                // oggetto o array (i MapResponse sono sempre oggetti).
-                if (c == '{' || c == '[')
-                {
-                    _current.Length = 0;
-                    _depth = 1;
-                    _inString = false;
-                    _escaped = false;
-                    _current.Append(c);
-                }
-                return null;
-            }
-
-            _current.Append(c);
-
-            if (_inString)
-            {
-                if (_escaped) _escaped = false;
-                else if (c == '\\') _escaped = true;
-                else if (c == '"') _inString = false;
-                return null;
-            }
-
-            if (c == '"') { _inString = true; return null; }
-            if (c == '{' || c == '[') { _depth++; return null; }
-            if (c == '}' || c == ']')
-            {
-                _depth--;
-                if (_depth == 0)
-                {
-                    string complete = _current.ToString();
-                    _current.Length = 0;
-                    return complete;
-                }
-            }
-            return null;
-        }
-
-        /// <summary>Vero se e' rimasto un valore incompleto: la risposta era troncata.</summary>
-        public bool HasPartialValue
-        {
-            get { return _depth != 0; }
-        }
     }
 }

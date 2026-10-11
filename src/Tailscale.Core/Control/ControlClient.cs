@@ -328,9 +328,15 @@ namespace Tailscale.Core.Control
 
                 if (parsed.AuthURL.Length > 0)
                 {
-                    SetState(ControlState.NeedLogin, parsed.AuthURL, null);
+                    // Lo stato NeedLogin viene pubblicato solo dopo il tentativo di
+                    // apertura: chi ascolta legge lo stato una volta sola e lo
+                    // interpreta, quindi non deve trovarlo ancora incompleto (era
+                    // il caso in cui il comando stampava "il browser non si e'
+                    // aperto" e subito dopo il log diceva il contrario).
+                    SetState(ControlState.NeedLogin, parsed.AuthURL, null, false);
                     if (_options.BrowserOpener != null && !IsBrowserOpened())
                         OpenLoginInBrowser();
+                    NotifyStatusChanged();
 
                     if (waitedSeconds >= _options.LoginTimeoutSeconds)
                     {
@@ -456,6 +462,16 @@ namespace Tailscale.Core.Control
 
         private void SetState(ControlState state, string loginUrl, string error)
         {
+            SetState(state, loginUrl, error, true);
+        }
+
+        /// <summary>
+        /// Cambia stato e, se richiesto, avvisa chi ascolta. Il parametro esiste per
+        /// i casi in cui lo stato ha ancora un passo da fare (l'apertura del
+        /// browser) prima di essere quello definitivo.
+        /// </summary>
+        private void SetState(ControlState state, string loginUrl, string error, bool notify)
+        {
             lock (_gate)
             {
                 // Una riga per ogni transizione: se lo stato non cambia mai come
@@ -471,6 +487,11 @@ namespace Tailscale.Core.Control
                 if (loginUrl != null) _status.LoginUrl = loginUrl;
             }
 
+            if (notify) NotifyStatusChanged();
+        }
+
+        private void NotifyStatusChanged()
+        {
             Action handler = StatusChanged;
             if (handler != null) handler();
         }

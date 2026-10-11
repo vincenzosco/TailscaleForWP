@@ -24,6 +24,8 @@ namespace Tailscale.Core.Tests
             Run("hpack tables", HpackTableTests.Run);
             Run("hpack decoder", HpackDecoderTests.Run);
             Run("http2", Http2Tests.Run);
+            Run("early payload", EarlyPayloadTests.Run);
+            Run("control client", ControlClientTests.Run);
 
             Console.WriteLine(T.Failures == 0 ? "ALL PASS" : "FAILURES: " + T.Failures);
             return T.Failures;

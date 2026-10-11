@@ -405,4 +405,78 @@ namespace Tailscale.Core.Tests
             }
         }
     }
+
+    /// <summary>
+    /// L'early payload e' il caso che ha bloccato il Task 10 per giorni: il server
+    /// manda 9 byte prima dei frame HTTP/2, e leggerli come se fossero un frame
+    /// faceva chiudere la connessione con un errore che non diceva nulla. Questi
+    /// test fissano le due meta' della faccenda: quando il magic c'e' si consuma,
+    /// quando non c'e' i 9 byte tornano intatti in lettura.
+    /// </summary>
+    public static class EarlyPayloadTests
+    {
+        public static void Run()
+        {
+            ConsumesPayloadBeforeFrames();
+            PutsBackANormalFrame();
+        }
+
+        private static void ConsumesPayloadBeforeFrames()
+        {
+            string early = "{\"nodeKeyChallenge\":\"abc123\"}";
+            MemoryStream memory = new MemoryStream();
+            byte[] header = new byte[9];
+            Array.Copy(EarlyPayload.Magic, header, EarlyPayload.Magic.Length);
+            header[5] = (byte)((early.Length >> 24) & 0xFF);
+            header[6] = (byte)((early.Length >> 16) & 0xFF);
+            header[7] = (byte)((early.Length >> 8) & 0xFF);
+            header[8] = (byte)(early.Length & 0xFF);
+            memory.Write(header, 0, header.Length);
+            for (int i = 0; i < early.Length; i++) memory.WriteByte((byte)early[i]);
+
+            // Dietro il payload c'e' il vero inizio di HTTP/2: un SETTINGS.
+            byte[] settings = T.FromHex("000000040000000000");
+            memory.Write(settings, 0, settings.Length);
+            memory.Position = 0;
+
+            List<string> lines = new List<string>();
+            PushbackStream stream = new PushbackStream(memory);
+            string json;
+            bool consumed = EarlyPayload.TryConsume(
+                stream, new DelegateLogSink(lines.Add), out json);
+
+            T.True(consumed, "early payload: letto");
+            T.Eq(early, json, "early payload: il JSON e' quello mandato");
+            T.True(lines.Count > 0, "early payload: la lettura finisce nei log");
+
+            // E quel che segue e' ancora il SETTINGS, non 9 byte in meno.
+            Http2Frame frame = Http2Frame.Read(stream);
+            T.Eq("Settings", frame.Type.ToString(), "early payload: dopo il payload si legge il frame");
+            T.Eq(0, frame.Payload.Length, "early payload: il frame non e' stato consumato per errore");
+        }
+
+        private static void PutsBackANormalFrame()
+        {
+            // Nessun magic: i 9 byte sono un frame HTTP/2 e devono restare leggibili.
+            byte[] settings = T.FromHex("000000040000000000");
+            byte[] headers = new Http2Frame(Http2FrameType.Headers, Http2Frame.FlagEndHeaders, 1,
+                T.FromHex("88")).ToBytes();
+            byte[] all = new byte[settings.Length + headers.Length];
+            Array.Copy(settings, 0, all, 0, settings.Length);
+            Array.Copy(headers, 0, all, settings.Length, headers.Length);
+
+            List<string> lines = new List<string>();
+            PushbackStream stream = new PushbackStream(new MemoryStream(all));
+            string json;
+            bool consumed = EarlyPayload.TryConsume(
+                stream, new DelegateLogSink(lines.Add), out json);
+
+            T.False(consumed, "senza magic: nessun early payload");
+            T.Eq(null, json, "senza magic: nessun JSON");
+            T.True(lines.Count > 0 && lines[0].Contains("assente"), "senza magic: il log lo dice");
+
+            T.Eq("Settings", Http2Frame.Read(stream).Type.ToString(), "senza magic: il SETTINGS si legge");
+            T.Eq("Headers", Http2Frame.Read(stream).Type.ToString(), "senza magic: anche il frame dopo");
+        }
+    }
 }
