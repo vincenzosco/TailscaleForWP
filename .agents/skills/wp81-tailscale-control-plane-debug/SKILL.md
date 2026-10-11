@@ -77,6 +77,7 @@ socket morto, ed è per questo che il client lo distingue.
 | `log:il motore non parte: la sorgente casuale del sistema non e' utilizzabile` | la sorgente casuale non passa il controllo, quindi l'app **non** costruisce il client di proposito (`src/Tailscale.Core/Util/RandomSourceCheck.cs#IsUsable`) | guasto vero del dispositivo: con quella sorgente l'identità sarebbe la stessa a ogni avvio e il server rifiuterebbe la node key |
 | `log:portachiavi: l'identita' non sopravvivera' al riavvio` | il portachiavi accetta la scrittura ma restituisce altro in lettura: il dispositivo apparirà nuovo a ogni avvio | non fatale, ma va riportato: il tailnet si riempie di dispositivi doppi |
 | `log:registro su file non disponibile: ` | il file del registro non è scrivibile: la diagnosi resta solo a schermo, e sparisce con l'app | dirlo quando si riporta il problema, perché le righe che mancano sono quelle |
+| `log:il motore e' gia' in moto: nessuna seconda partenza` | un secondo avvio chiesto mentre il ciclo del motore gira: viene rifiutato di proposito (due client sullo stesso stato si contenderebbero la stessa chiave) | nessuna: il pulsante torna vivo quando il ciclo esce |
 
 ## 4. Cosa fare quando si riporta il problema
 

@@ -34,9 +34,17 @@ namespace Tailscale.Services
 
         private readonly object _gate = new object();
 
+        /// <summary>
+        /// Il ciclo del motore: uno solo per volta, e si libera quando il ciclo esce.
+        ///
+        /// La regola sta nel core (con il suo test) e non qui: un flag tenuto
+        /// dall'app sopravviveva alla fine del ciclo, e da li' veniva il guasto -- in
+        /// stato di errore il pulsante principale non riavviava piu' niente.
+        /// </summary>
+        private readonly EngineRunState _run = new EngineRunState();
+
         private ControlClient _client;
         private VaultBackedStateStore _state;
-        private bool _started;
 
         /// <summary>Vero se l'app si e' sospesa con il motore in moto: al ritorno si riparte.</summary>
         private bool _resumePending;
@@ -64,8 +72,13 @@ namespace Tailscale.Services
 
         public string DeviceName { get; private set; }
 
-        /// <summary>Vero se il client e' stato avviato almeno una volta.</summary>
-        public bool IsStarted { get { lock (_gate) return _started; } }
+        /// <summary>
+        /// Vero se il ciclo del motore e' in corso. Se il ciclo e' uscito da solo
+        /// (budget dei tentativi esaurito) qui c'e' falso: e' la verita' che serve
+        /// alla pagina per riaccendere il pulsante e alla sospensione per sapere se
+        /// al ritorno c'e' qualcosa da riavviare.
+        /// </summary>
+        public bool IsStarted { get { return _run.IsRunning; } }
 
         public ControlStatus Status
         {
@@ -103,18 +116,37 @@ namespace Tailscale.Services
         }
 
         /// <summary>
-        /// Avvia il client. Chiamarla due volte non fa nulla: una pagina che torna
-        /// in primo piano non deve creare un secondo motore (due client sullo stesso
-        /// stato si contenderebbero la stessa chiave).
+        /// Avvia il client, su un thread di lavoro: il login e la netmap sono attese
+        /// lunghe e la pagina deve restare reattiva.
+        ///
+        /// Due chiamate ravvicinate non fanno nascere due motori: la seconda non
+        /// trova posto e lo dice nel registro. Il ciclo libera il motore quando esce
+        /// -- anche quando esce per un errore -- ed e' quello che riaccende il
+        /// pulsante principale.
         /// </summary>
         public void Start()
         {
-            lock (_gate)
+            Task.Factory.StartNew(delegate()
             {
-                if (_started) return;
-                _started = true;
-            }
+                if (!_run.Run(RunEngine))
+                {
+                    _log.Log("il motore e' gia' in moto: nessuna seconda partenza");
+                    return;
+                }
 
+                // Il ciclo e' uscito: arresto voluto, oppure budget esaurito. La
+                // pagina deve tornare a mostrare il pulsante che rimette in moto il
+                // motore -- e quel pulsante ora funziona davvero.
+                RaiseChanged();
+            });
+        }
+
+        /// <summary>
+        /// Il ciclo del motore: costruisce il client, lo lascia girare finche' non si
+        /// ferma, e non torna prima. Gira sul thread di lavoro di Start().
+        /// </summary>
+        private void RunEngine()
+        {
             _log.Log("avvio del motore");
             _log.Log("registro su file: " + LogFileLocation);
             DeviceName = ReadDeviceName();
@@ -154,7 +186,6 @@ namespace Tailscale.Services
             if (!RandomSourceCheck.IsUsable(options.Random, _log))
             {
                 _log.Log("il motore non parte: la sorgente casuale del sistema non e' utilizzabile");
-                lock (_gate) _started = false;
                 RaiseChanged();
                 return;
             }
@@ -179,7 +210,6 @@ namespace Tailscale.Services
                 // Una sorgente casuale rotta o uno stato illeggibile non devono far
                 // chiudere l'app: l'errore resta nel registro e si puo' ritentare.
                 _log.Log("il motore non e' partito (" + ex.GetType().Name + "): " + ex.Message);
-                lock (_gate) _started = false;
                 RaiseChanged();
                 return;
             }
@@ -189,19 +219,18 @@ namespace Tailscale.Services
 
             lock (_gate) _client = client;
 
-            // Il login e la netmap sono attese lunghe: la UI non deve restare ferma.
-            Task.Factory.StartNew(delegate()
+            // Questo e' il thread del ciclo: il client ci gira sopra, e non serve un
+            // terzo thread. La chiamata torna quando il client si ferma -- arresto
+            // voluto, o budget dei tentativi esaurito -- e da quel momento il motore
+            // e' di nuovo avviabile.
+            try
             {
-                try
-                {
-                    client.Start();
-                }
-                catch (Exception ex)
-                {
-                    _log.Log("il motore si e' fermato con un errore (" + ex.GetType().Name + "): " + ex.Message);
-                    RaiseChanged();
-                }
-            });
+                client.Start();
+            }
+            catch (Exception ex)
+            {
+                _log.Log("il motore si e' fermato con un errore (" + ex.GetType().Name + "): " + ex.Message);
+            }
         }
 
         public void Stop()
@@ -213,9 +242,10 @@ namespace Tailscale.Services
             try { client.Stop(); }
             catch (Exception ex) { _log.Log("errore in arresto: " + ex.Message); }
 
-            // Un motore fermo si puo' riaccendere: senza questo azzeramento Start()
-            // esce subito, e dopo una sospensione l'app resterebbe ferma per sempre.
-            lock (_gate) _started = false;
+            // Il motore non si segna fermo qui: e' l'uscita del ciclo a liberarlo
+            // (EngineRunState). client.Stop() chiude il canale, il ciclo in corso esce,
+            // e solo allora un nuovo avvio puo' partire: due client sullo stesso stato
+            // si contenderebbero la stessa chiave.
             RaiseChanged();
         }
 
@@ -227,6 +257,9 @@ namespace Tailscale.Services
         /// </summary>
         public void Suspend()
         {
+            // IsStarted e' vero solo se il ciclo e' davvero in moto: se il motore si
+            // era fermato da solo, al ritorno non c'e' niente da riavviare d'ufficio,
+            // ed e' giusto cosi' (l'utente decide, con il pulsante).
             _resumePending = IsStarted;
             Stop();
         }
