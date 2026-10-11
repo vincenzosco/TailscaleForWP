@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using Tailscale.Core;
 using Tailscale.Core.Control;
 using Tailscale.Core.Keys;
@@ -29,6 +30,9 @@ namespace Tailscale.Core.Tests
             Case("errore duplicato su non-200", RecoversFromDuplicateOnNonSuccess);
             Case("errore duplicato ripetuto: stop", StopsAfterOneDuplicateRefresh);
             Case("canale rotto: non si riusa", BrokenChannelIsNotReused);
+            Case("canale interrotto: la registrazione riprova", ChannelFailureDuringRegisterIsRetried);
+            Case("canale interrotto sempre: si smette con un errore", RegisterGivesUpAfterTheBudget);
+            Case("arresto durante la registrazione: non e' un errore", StoppingIsNotAnError);
         }
 
         private static void Case(string name, Action test)
@@ -307,6 +311,71 @@ namespace Tailscale.Core.Tests
                    "canale rotto: il registro dice perche' il canale e' stato rifatto");
         }
 
+        /// <summary>
+        /// Il caso che l'utente ha visto: il sistema interrompe il socket mentre il
+        /// client si registra, e l'interruzione e' passeggera. Prima della correzione
+        /// finiva in `Error` e il motore si fermava li': l'utente autorizzava nel
+        /// browser e l'app non si aggiornava piu'.
+        /// </summary>
+        private static void ChannelFailureDuringRegisterIsRetried()
+        {
+            MemoryStateStore store = new MemoryStateStore();
+            FlakyConnection connection = new FlakyConnection(AuthorizedResponse(), 1);
+
+            List<string> lines;
+            ControlClient client = RunClient(store, connection, 3, out lines);
+
+            T.Eq(2, connection.Calls, "canale interrotto: la registrazione viene ritentata una volta");
+            T.True(HasLine(lines, "lo rifaccio"), "canale interrotto: il registro dice il nuovo tentativo");
+            T.True(HasLine(lines, "nodo autorizzato"), "canale interrotto: la registrazione si conclude");
+            T.False(HasLine(lines, "-> Error"), "canale interrotto: nessun errore mostrato");
+            T.True(client.Status.State != ControlState.Error,
+                   "canale interrotto: lo stato non e' Error");
+        }
+
+        /// <summary>
+        /// Un canale morto per sempre deve finire con un errore comprensibile
+        /// invece di ritentare all'infinito: la ritentata e' un rimedio, non una
+        /// condanna a girare.
+        /// </summary>
+        private static void RegisterGivesUpAfterTheBudget()
+        {
+            MemoryStateStore store = new MemoryStateStore();
+            FlakyConnection connection = new FlakyConnection(AuthorizedResponse(), int.MaxValue);
+
+            List<string> lines;
+            ControlClient client = RunClient(store, connection, 3, out lines);
+
+            // Tetto 3: il primo tentativo piu' tre ritentate, poi l'errore.
+            T.Eq(4, connection.Calls, "canale morto: i tentativi sono limitati dal tetto");
+            T.True(HasLine(lines, "canale di controllo non disponibile"),
+                   "canale morto: il registro lo dice");
+            T.Eq(ControlState.Error.ToString(), client.Status.State.ToString(),
+                 "canale morto: dopo il tetto si mostra l'errore invece di ciclare");
+        }
+
+        /// <summary>
+        /// Il pulsante "Ferma" mentre una richiesta e' in volo, e la sospensione
+        /// dell'app, devono fermare il motore: un arresto voluto non e' un errore e
+        /// non deve diventare una schermata rossa.
+        /// </summary>
+        private static void StoppingIsNotAnError()
+        {
+            MemoryStateStore store = new MemoryStateStore();
+            FlakyConnection connection = new FlakyConnection(AuthorizedResponse(), int.MaxValue);
+            connection.Stopper = true;
+
+            List<string> lines;
+            ControlClient client = RunClient(store, connection, 3, out lines);
+
+            T.Eq(1, connection.Calls, "arresto: non si ritenta dopo che il motore e' stato fermato");
+            T.True(HasLine(lines, "in arresto"), "arresto: il registro dice perche' si e' smesso");
+            T.False(HasLine(lines, "canale di controllo non disponibile"),
+                    "arresto: nessun errore per una cosa voluta");
+            T.Eq(ControlState.Stopped.ToString(), client.Status.State.ToString(),
+                 "arresto: lo stato resta Fermo, non diventa Error");
+        }
+
         /// <summary>La risposta esatta con cui il control server rifiuta una node key ancora nota.</summary>
         private static string DuplicateError()
         {
@@ -393,6 +462,48 @@ namespace Tailscale.Core.Tests
 
             lines = captured;
             return client;
+        }
+
+        /// <summary>
+        /// Avvia un client su un canale che si puo' far fallire. L'attesa finta ferma
+        /// il client solo quando e' arrivato da qualche parte (autorizzato o in
+        /// errore): una ritentata dorme a pezzi dentro il backoff, quindi fermarlo
+        /// dopo due attese misurerebbe l'arresto invece del recupero.
+        /// </summary>
+        private static ControlClient RunClient(IStateStore store, FlakyConnection connection,
+                                              int maxRetries, out List<string> lines)
+        {
+            List<string> captured = new List<string>();
+            ControlClientOptions options = Options(store, new FakeConnection());
+            options.Log = new DelegateLogSink(captured.Add);
+            options.MaxChannelRetries = maxRetries;
+
+            ControlClient[] holder = new ControlClient[1];
+            options.ConnectionFactory = delegate()
+            {
+                connection.Attach(holder[0]);
+                return connection;
+            };
+            int sleeps = 0;
+            options.Sleep = delegate(int milliseconds)
+            {
+                sleeps++;
+                ControlClient client = holder[0];
+                if (client == null) return;
+
+                // Si ferma quando il client e' arrivato da qualche parte (autorizzato
+                // o in errore) e comunque dopo un tetto di attese: la netmap finta non
+                // consegna nulla, quindi il client continua legittimamente a
+                // riconnettersi e senza il tetto il test non finirebbe mai.
+                if (client.Status.State != ControlState.Connecting || sleeps > 200) client.Stop();
+            };
+
+            ControlClient started = new ControlClient(options);
+            holder[0] = started;
+            started.Start();
+
+            lines = captured;
+            return started;
         }
 
         // --- attrezzi ---
@@ -505,6 +616,59 @@ namespace Tailscale.Core.Tests
                                         List<KeyValuePair<string, string>> headers)
             {
                 return _script.Next(jsonBody);
+            }
+
+            public void PostStream(string path, string jsonBody,
+                                   List<KeyValuePair<string, string>> headers,
+                                   Action<string> onJson, int watchdogSeconds)
+            {
+            }
+
+            public bool IsBroken { get { return false; } }
+
+            public void Dispose() { }
+        }
+
+        /// <summary>
+        /// Un canale che fallisce come il socket di un'app sospesa, poi risponde.
+        /// Il testo dell'errore e' quello che il canale vero produce.
+        /// </summary>
+        private sealed class FlakyConnection : IControlConnection
+        {
+            public const string Interrupted =
+                "canale di controllo interrotto durante la richiesta /machine/register"
+                + ": la connessione e' caduta o il sistema ha interrotto la lettura";
+
+            private readonly string _body;
+            private ControlClient _client;
+
+            public int FailuresRemaining;
+            public int Calls;
+            public bool Stopper;
+
+            public FlakyConnection(string body, int failures)
+            {
+                _body = body;
+                FailuresRemaining = failures;
+            }
+
+            public void Attach(ControlClient client) { _client = client; }
+
+            public ControlResponse Post(string path, string jsonBody,
+                                       List<KeyValuePair<string, string>> headers)
+            {
+                Calls++;
+                if (FailuresRemaining > 0)
+                {
+                    FailuresRemaining--;
+                    if (Stopper && _client != null) _client.Stop();
+                    throw new ControlStreamException(Interrupted, new IOException(Interrupted));
+                }
+
+                ControlResponse response = new ControlResponse();
+                response.StatusCode = 200;
+                response.Body = _body;
+                return response;
             }
 
             public void PostStream(string path, string jsonBody,
