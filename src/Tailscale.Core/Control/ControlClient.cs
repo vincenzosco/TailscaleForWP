@@ -104,6 +104,18 @@ namespace Tailscale.Core.Control
         public IHttpFetcher Fetcher;
 
         /// <summary>
+        /// Dove tenere cio' che deve sopravvivere al riavvio (chiave macchina, node
+        /// key, URL di login). Se e' null il client vive solo in memoria.
+        /// </summary>
+        public IStateStore State;
+
+        /// <summary>
+        /// Chiave di autenticazione ("tskey-auth-..."): se e' valorizzata la
+        /// registrazione non ha bisogno che l'utente apra il browser (requisito R6).
+        /// </summary>
+        public string AuthKey;
+
+        /// <summary>
         /// Come aprire l'URL di login. Se resta null il client non apre nulla: e'
         /// il chiamante a decidere (la UI del telefono usa il browser di sistema).
         /// </summary>
@@ -150,13 +162,94 @@ namespace Tailscale.Core.Control
         public ControlClient(ControlClientOptions options)
         {
             if (options == null) throw new ArgumentNullException("options");
-            if (options.MachineKeyPair == null) throw new ArgumentException("serve una coppia di chiavi della macchina", "options");
             if (options.Random == null) throw new ArgumentException("serve una sorgente casuale", "options");
             if (options.Sleep == null) throw new ArgumentException("serve una funzione di attesa", "options");
+            if (options.MachineKeyPair == null && options.State == null)
+                throw new ArgumentException("serve una coppia di chiavi della macchina o uno IStateStore da cui leggerla", "options");
 
             _options = options;
-            if (_options.NodeKey == null) _options.NodeKey = GenerateNodeKey();
+
+            // Prima si recupera quello che c'e' gia': generare chiavi nuove a ogni
+            // avvio farebbe apparire il telefono come un nodo diverso a ogni lancio,
+            // e il tailnet si riempirebbe di dispositivi fantasma.
+            if (_options.State != null) RestoreState();
+
+            if (_options.MachineKeyPair == null)
+            {
+                _options.MachineKeyPair = KeyPair.Generate(_options.Random);
+                SaveMachineKey();
+            }
+            if (_options.NodeKey == null)
+            {
+                _options.NodeKey = GenerateNodeKey();
+                SaveNodeKey();
+            }
             if (_options.DiscoKey == null) _options.DiscoKey = GenerateDiscoKey();
+        }
+
+        // Nomi dei valori nello stato: cambiarli significa far ripartire da zero
+        // chi ha gia' un'app installata, quindi restano quelli (spec §5).
+        private const string StateMachineKey = "machineKey";
+        private const string StateNodeKey = "nodeKey";
+        private const string StateAuthUrl = "authUrl";
+
+        /// <summary>Rilegge chiavi e URL salvati. Un valore illeggibile si logga e si rigenera.</summary>
+        private void RestoreState()
+        {
+            string machine = _options.State.Read(StateMachineKey);
+            if (!string.IsNullOrEmpty(machine))
+            {
+                try
+                {
+                    _options.MachineKeyPair = KeyMaterial.LoadPrivate(machine);
+                }
+                catch (Exception ex)
+                {
+                    _options.Log.Log("stato: la chiave macchina salvata non e' leggibile ("
+                                     + ex.Message + "), ne genero una nuova");
+                }
+            }
+
+            string node = _options.State.Read(StateNodeKey);
+            if (!string.IsNullOrEmpty(node))
+            {
+                try
+                {
+                    _options.NodeKey = NodeKey.Parse(node);
+                }
+                catch (Exception ex)
+                {
+                    _options.Log.Log("stato: la node key salvata non e' leggibile (" + ex.Message
+                                     + "), ne genero una nuova");
+                }
+            }
+
+            string authUrl = _options.State.Read(StateAuthUrl);
+            if (!string.IsNullOrEmpty(authUrl))
+            {
+                lock (_gate) _status.LoginUrl = authUrl;
+                _options.Log.Log("stato: c'e' un URL di login salvato da un avvio precedente");
+            }
+        }
+
+        private void SaveMachineKey()
+        {
+            if (_options.State == null) return;
+            _options.State.Write(StateMachineKey, KeyMaterial.SavePrivate(_options.MachineKeyPair));
+        }
+
+        private void SaveNodeKey()
+        {
+            if (_options.State == null) return;
+            _options.State.Write(StateNodeKey, _options.NodeKey.ToString());
+        }
+
+        /// <summary>Salva l'URL di login, o lo dimentica se non ce n'e' piu' bisogno.</summary>
+        private void SaveAuthUrl(string url)
+        {
+            if (_options.State == null) return;
+            if (string.IsNullOrEmpty(url)) _options.State.Delete(StateAuthUrl);
+            else _options.State.Write(StateAuthUrl, url);
         }
 
         public ControlStatus Status
@@ -168,6 +261,40 @@ namespace Tailscale.Core.Control
 
         /// <summary>Numero di connessioni map aperte: serve ai test per contare i riavvii.</summary>
         public int ConnectionGeneration { get { return _generations; } }
+
+        /// <summary>L'URL di login corrente, o null se non serve accedere.</summary>
+        public string LoginUrl
+        {
+            get
+            {
+                lock (_gate) return _status.LoginUrl;
+            }
+        }
+
+        /// <summary>
+        /// Dimentica chiavi e URL salvati e riparte da un nodo nuovo. Non fa nulla
+        /// di distruttivo sul server: il vecchio nodo resta nel tailnet finche' non
+        /// lo si rimuove dall'admin console, ed e' scritto nel README.
+        /// </summary>
+        public void Logout()
+        {
+            Stop();
+
+            if (_options.State != null)
+            {
+                _options.State.Delete(StateMachineKey);
+                _options.State.Delete(StateNodeKey);
+                _options.State.Delete(StateAuthUrl);
+            }
+
+            lock (_gate) _status.LoginUrl = null;
+
+            _options.MachineKeyPair = KeyPair.Generate(_options.Random);
+            _options.NodeKey = GenerateNodeKey();
+            SaveMachineKey();
+            SaveNodeKey();
+            _options.Log.Log("logout: chiavi dimenticate e rigenerate");
+        }
 
         public NodeKey NodeKey { get { return _options.NodeKey; } }
 
@@ -261,6 +388,7 @@ namespace Tailscale.Core.Control
                 // Dopo una rotazione il server deve poter collegare la chiave nuova a
                 // quella vecchia, altrimenti il nodo viene visto come nuovo.
                 if (_oldNodeKey != null) request.OldNodeKey = _oldNodeKey;
+                if (!string.IsNullOrEmpty(_options.AuthKey)) request.Auth = _options.AuthKey;
                 request.Hostinfo = BuildHostinfo();
                 // Followup dice al server di tenere aperta la risposta finche' l'utente
                 // non ha visitato l'URL: senza di esso il server risponde subito.
@@ -334,6 +462,7 @@ namespace Tailscale.Core.Control
                     // il caso in cui il comando stampava "il browser non si e'
                     // aperto" e subito dopo il log diceva il contrario).
                     SetState(ControlState.NeedLogin, parsed.AuthURL, null, false);
+                    SaveAuthUrl(parsed.AuthURL);
                     if (_options.BrowserOpener != null && !IsBrowserOpened())
                         OpenLoginInBrowser();
                     NotifyStatusChanged();
@@ -357,6 +486,10 @@ namespace Tailscale.Core.Control
                 {
                     _status.LoginUrl = null;
                 }
+                // Anche nello store: un URL salvato da un avvio precedente, se
+                // restasse, al prossimo avvio l'app inviterebbe ad accedere un
+                // dispositivo che e' gia' dentro.
+                SaveAuthUrl(null);
                 _options.Log.Log("nodo autorizzato; ultimo login: " + parsed.LoginName);
                 return true;
             }
@@ -483,7 +616,13 @@ namespace Tailscale.Core.Control
 
                 _status.State = state;
                 _status.ErrorMessage = error;
-                if (state == ControlState.Authorized) _status.LoginUrl = null;
+                if (state == ControlState.Authorized)
+                {
+                    // Autorizzato: l'URL non serve piu' e non va ripresentato al
+                    // prossimo avvio (sarebbe un invito ad accedere di nuovo).
+                    _status.LoginUrl = null;
+                    SaveAuthUrl(null);
+                }
                 if (loginUrl != null) _status.LoginUrl = loginUrl;
             }
 
