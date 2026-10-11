@@ -696,11 +696,18 @@ namespace Tailscale.Core.Control
         /// <summary>Apre lo stream della netmap e lo legge finche' non si chiama Stop.</summary>
         private void ReadMap()
         {
+            int attemptsWithoutMap = 0;
+            bool mapArrived = false;
+
             while (!_stopping)
             {
                 try
                 {
-                    ReadMapOnce();
+                    if (ReadMapOnce())
+                    {
+                        mapArrived = true;
+                        attemptsWithoutMap = 0;
+                    }
                     if (_stopping) return;
                     _options.Log.Log("stream della netmap chiuso; riconnessione");
                 }
@@ -708,6 +715,22 @@ namespace Tailscale.Core.Control
                 {
                     if (_stopping) return;
                     _options.Log.Log("stream della netmap interrotto: " + ex.Message);
+                }
+
+                // Una netmap mai arrivata e' un guasto che l'utente deve vedere. Dopo la
+                // prima, invece, i dati che ha in mano restano validi e si ritenta come
+                // il client Go: un errore cancellerebbe senza motivo quello che si vede.
+                if (!mapArrived)
+                {
+                    attemptsWithoutMap++;
+                    if (attemptsWithoutMap > _options.MaxChannelRetries)
+                    {
+                        _options.Log.Log("netmap non disponibile dopo " + _options.MaxChannelRetries
+                                         + " tentativi: mi fermo e lo dico");
+                        SetState(ControlState.Error, null,
+                                 "netmap non disponibile: nuovo tentativo fra poco");
+                        return;
+                    }
                 }
 
                 if (!BackoffBeforeReconnect()) return;
@@ -769,7 +792,12 @@ namespace Tailscale.Core.Control
             return BackoffBeforeReconnect();
         }
 
-        private void ReadMapOnce()
+        /// <summary>
+        /// Un giro sullo stream della netmap. Restituisce true se in questo giro e'
+        /// arrivato almeno un messaggio: e' la differenza fra "il canale non porta
+        /// nulla" e "la netmap c'e' ma si e' interrotta".
+        /// </summary>
+        private bool ReadMapOnce()
         {
             MapRequest request = new MapRequest();
             request.Version = _options.Version;
@@ -789,9 +817,11 @@ namespace Tailscale.Core.Control
             // applica ogni MapResponse. Il watchdog e' nella connessione, che chiude
             // lo stream se non arriva nulla: senza di esso un server muto lascerebbe
             // l'app bloccata per sempre.
+            bool delivered = false;
             _connection.PostStream(ProtocolConstants.MapPath, request.ToJson(), headers,
                 delegate(string json)
                 {
+                    delivered = true;
                     MapResponse response = MapResponse.FromJson(json);
                     _netmap.Apply(response);
 
@@ -805,6 +835,7 @@ namespace Tailscale.Core.Control
                         PublishNetmap();
                     }
                 }, _options.MapWatchdogSeconds);
+            return delivered;
         }
 
         private void PublishNetmap()

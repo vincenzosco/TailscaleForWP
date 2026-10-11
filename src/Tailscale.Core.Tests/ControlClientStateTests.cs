@@ -39,6 +39,8 @@ namespace Tailscale.Core.Tests
             Case("followup scaduta: e' la fine del login, non un errore", AFollowupThatTimesOutIsALoginTimeout);
             Case("primo tentativo scaduto: si ritenta", AFirstAttemptThatTimesOutIsRetried);
             Case("arresto durante una scadenza: non e' un errore", StoppingDuringADeadlineIsNotAnError);
+            Case("netmap mai arrivata: si smette con un errore", MapNeverArrivesGivesUpWithAnError);
+            Case("netmap persa dopo l'arrivo: si ritenta senza cancellare", MapDropsAfterItArrivedKeepsRetrying);
         }
 
         private static void Case(string name, Action test)
@@ -327,6 +329,10 @@ namespace Tailscale.Core.Tests
         {
             MemoryStateStore store = new MemoryStateStore();
             FlakyConnection connection = new FlakyConnection(AuthorizedResponse(), 1);
+            // La netmap arriva: questo test misura il recupero della *registrazione*,
+            // non il tetto della netmap, e un canale che non consegna mai nulla ora
+            // finirebbe in Error per un motivo che non c'entra.
+            connection.MapMessage = "{\"Self\":{\"Hostname\":\"telefono\"},\"Peers\":[]}";
 
             List<string> lines;
             ControlClient client = RunClient(store, connection, 3, out lines);
@@ -464,6 +470,71 @@ namespace Tailscale.Core.Tests
         }
 
         /// <summary>Uno store con un'identita' gia' autorizzata: il device che l'admin ha cancellato.</summary>
+        // --- netmap ---
+
+        /// <summary>
+        /// La netmap non e' mai arrivata e il canale non la porta: senza un limite il
+        /// client ritenta in silenzio per sempre, e l'utente resta su una schermata
+        /// vecchia senza che nulla dica che qualcosa non va.
+        /// </summary>
+        private static void MapNeverArrivesGivesUpWithAnError()
+        {
+            MemoryStateStore store = new MemoryStateStore();
+            FlakyConnection connection = new FlakyConnection(AuthorizedResponse(), 0);
+            connection.MapFails = true;
+            connection.MapMessage = null;
+
+            List<string> lines;
+            ControlClient client = RunClient(store, connection, 3, out lines);
+
+            // Tetto 3: il primo tentativo piu' tre ritentate, poi l'errore.
+            T.Eq(4, connection.MapCalls, "netmap mai arrivata: i tentativi sono limitati dal tetto");
+            T.True(HasLine(lines, "netmap non disponibile"), "netmap mai arrivata: il registro lo dice");
+            T.Eq(ControlState.Error.ToString(), client.Status.State.ToString(),
+                 "netmap mai arrivata: si mostra l'errore invece di ciclare in silenzio");
+        }
+
+        /// <summary>
+        /// Dopo la prima netmap i dati che l'utente vede sono validi: il client
+        /// continua a ritentare come il client Go, invece di dichiarare un errore e
+        /// lasciare la lista peer in mano a un messaggio.
+        /// </summary>
+        private static void MapDropsAfterItArrivedKeepsRetrying()
+        {
+            MemoryStateStore store = new MemoryStateStore();
+            FlakyConnection connection = new FlakyConnection(AuthorizedResponse(), 0);
+            connection.MapFails = true;
+            connection.MapMessage = "{\"Self\":{\"Hostname\":\"telefono\"},\"Peers\":[]}";
+
+            // Costruito qui e non con RunClient: la netmap autorizzata porta lo stato ad
+            // Authorized, e il Sleep di RunClient fermerebbe il client al primo
+            // tentativo. Qui il Sleep conta e basta, e il tetto e' largo apposta (600
+            // attese = il backoff simulato, istantaneo nei fatti).
+            List<string> captured = new List<string>();
+            ControlClientOptions options = Options(store, new FakeConnection());
+            options.Log = new DelegateLogSink(captured.Add);
+            options.MaxChannelRetries = 3;
+            options.ConnectionFactory = delegate() { return connection; };
+
+            ControlClient[] holder = new ControlClient[1];
+            int sleeps = 0;
+            options.Sleep = delegate(int milliseconds)
+            {
+                sleeps++;
+                if (sleeps > 600 && holder[0] != null) holder[0].Stop();
+            };
+
+            ControlClient client = new ControlClient(options);
+            holder[0] = client;
+            client.Start();
+
+            // Il tetto e' 3: se il contatore si applicasse anche a una netmap gia'
+            // arrivata, il ciclo si sarebbe fermato a 4 tentativi con un errore.
+            T.True(connection.MapCalls >= 5, "netmap persa: si ritenta oltre il tetto dei tentativi");
+            T.True(captured.Count > 0, "netmap persa: il registro riporta i tentativi");
+            T.True(client.Status.State != ControlState.Error, "netmap persa: nessun errore mostrato");
+        }
+
         // --- scadenze ---
 
         /// <summary>
@@ -521,6 +592,9 @@ namespace Tailscale.Core.Tests
             MemoryStateStore store = new MemoryStateStore();
             TimeoutConnection connection = new TimeoutConnection(AuthorizedResponse());
             connection.FailOnCall = 1;
+            // Una netmap che arriva subito: il caso prova il recupero del primo
+            // tentativo, e senza di essa l'errore arriverebbe dal tetto della netmap.
+            connection.MapMessage = "{\"Self\":{\"Hostname\":\"telefono\"},\"Peers\":[]}";
 
             List<string> lines;
             ControlClient client = RunTimeouts(store, connection, 45, 10, out lines);
@@ -854,6 +928,12 @@ namespace Tailscale.Core.Tests
             public int Calls;
             public bool Stopper;
 
+            // Parte map: null = lo stream non consegna mai nulla.
+            public int MapCalls;
+            public string MapMessage;
+            public bool MapFails;
+            public int MapMessagesBeforeFailing = 1;
+
             public FlakyConnection(string body, int failures)
             {
                 _body = body;
@@ -884,6 +964,10 @@ namespace Tailscale.Core.Tests
                                    List<KeyValuePair<string, string>> headers,
                                    Action<string> onJson, int watchdogSeconds)
             {
+                MapCalls++;
+                if (MapFails && MapCalls > MapMessagesBeforeFailing)
+                    throw new ControlStreamException(Interrupted, new IOException(Interrupted));
+                if (MapMessage != null) onJson(MapMessage);
             }
 
             public bool IsBroken { get { return false; } }
@@ -941,6 +1025,7 @@ namespace Tailscale.Core.Tests
             public int Calls;
             public int FailOnCall;
             public bool Stopper;
+            public string MapMessage;
             private ControlClient _client;
 
             public TimeoutConnection(string body) { _body = body; }
@@ -970,6 +1055,7 @@ namespace Tailscale.Core.Tests
                                    List<KeyValuePair<string, string>> headers,
                                    Action<string> onJson, int watchdogSeconds)
             {
+                if (MapMessage != null) onJson(MapMessage);
             }
 
             public bool IsBroken { get { return false; } }
