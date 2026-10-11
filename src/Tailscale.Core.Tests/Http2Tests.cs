@@ -35,6 +35,7 @@ namespace Tailscale.Core.Tests
             Case("corpo utf8", ReadsUtf8Body);
             Case("max frame size zero", IgnoresAnUnusableMaxFrameSize);
             Case("padding e priorita'", ReadsHeadersWithPaddingAndPriority);
+            Case("lettura interrotta: la causa resta", UnreadableFrameKeepsItsCause);
         }
 
         /// <summary>
@@ -184,6 +185,64 @@ namespace Tailscale.Core.Tests
             {
                 T.Failures++;
                 Console.WriteLine("FAIL http2/" + name + ": " + ex.GetType().Name + ": " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Il testo esatto che il sistema consegna quando interrompe una lettura su
+        /// uno stream WinRT (l'adattatore `AsStreamForRead` del telefono): e' il
+        /// guasto che l'app vede quando il sistema sospende il processo con una
+        /// lettura in volo.
+        /// </summary>
+        private const string AbortedText =
+            "The I/O operation has been aborted because of either a thread exit or an application request. "
+            + "(Exception from HRESULT: 0x800703E3)";
+
+        /// <summary>
+        /// Stream che scrive nel vuoto e fallisce in lettura come il socket di
+        /// un'app sospesa: serve a esercitare il percorso della lettura senza WinRT.
+        /// </summary>
+        private sealed class AbortingReadStream : Stream
+        {
+            public override bool CanRead { get { return true; } }
+            public override bool CanSeek { get { return false; } }
+            public override bool CanWrite { get { return true; } }
+            public override long Length { get { throw new NotSupportedException(); } }
+            public override long Position { get { throw new NotSupportedException(); } set { throw new NotSupportedException(); } }
+            public override void Flush() { }
+            public override long Seek(long offset, SeekOrigin origin) { throw new NotSupportedException(); }
+            public override void SetLength(long value) { throw new NotSupportedException(); }
+            public override void Write(byte[] buffer, int offset, int count) { }
+
+            public override int Read(byte[] buffer, int offset, int count)
+            {
+                throw new IOException(AbortedText);
+            }
+        }
+
+        /// <summary>
+        /// Un errore di lettura senza la sua causa e' un vicolo cieco: chi legge non
+        /// sa piu' se il peer ha chiuso, se il sistema ha interrotto la lettura o se
+        /// il socket e' stato chiuso da noi. La causa va portata fino al chiamante,
+        /// che e' l'unico che puo' decidere se rifare il canale o arrendersi.
+        /// </summary>
+        private static void UnreadableFrameKeepsItsCause()
+        {
+            Http2Connection connection = new Http2Connection(
+                new AbortingReadStream(), NullLogSink.Instance);
+
+            try
+            {
+                connection.Post("/machine/register", new byte[] { 0x7b, 0x7d },
+                                new List<KeyValuePair<string, string>>());
+                T.True(false, "http2: la lettura interrotta deve essere segnalata");
+            }
+            catch (Http2Exception ex)
+            {
+                T.True(ex.InnerException != null,
+                       "http2: l'errore di lettura conserva la causa (InnerException)");
+                T.Eq(AbortedText, ex.InnerException == null ? null : ex.InnerException.Message,
+                     "http2: la causa e' l'IOException del sistema");
             }
         }
 
