@@ -18,6 +18,8 @@ namespace Tailscale.Core.Tests
             Run("hkdf", HkdfTests.Run);
             Run("naclbox", NaClBoxTests.Run);
             Run("key parse", KeyParseTests.Run);
+            Run("hkdf blake2s", HkdfBlake2sTests.Run);
+            Run("noise handshake", NoiseHandshakeTests.Run);
 
             Console.WriteLine(T.Failures == 0 ? "ALL PASS" : "FAILURES: " + T.Failures);
             return T.Failures;

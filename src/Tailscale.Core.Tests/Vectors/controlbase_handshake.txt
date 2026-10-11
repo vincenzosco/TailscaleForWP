@@ -1,0 +1,86 @@
+controlbase — Noise IK, istanza Noise_IK_25519_ChaChaPoly_BLAKE2s
+==============================================================
+
+Origine
+-------
+Trascritto da refs/tailscale/control/controlbase/ (pin v1.104.1):
+  - handshake.go   : ClientDeferred, continueClientHandshake, Server, symmetricState
+  - conn.go        : maxMessageSize, nonce
+  - messages.go    : msgTypeInitiation/Response/Error/Record, headerLen, i tipi dei messaggi
+
+Perche' non ci sono vector di byte fissi
+----------------------------------------
+I vector non sono ottenibili qui: handshake_test.go genera le chiavi con
+key.NewMachine() (casuali), noiseexplorer_test.go e' una seconda implementazione
+in Go ma non e' eseguibile senza un toolchain Go, e l'unico pacchetto Noise
+disponibile per Node (noise-handshake) istanzia BLAKE2b, non BLAKE2s.
+
+La verifica forte e' quindi il dialogo con controlplane.tailscale.com (Task 9);
+questo file fissa il layout, e NoiseHandshakeTests lo verifica byte per byte piu'
+l'autenticazione di ogni singolo byte dei due messaggi.
+
+Layout del messaggio di initiation (101 byte)
+---------------------------------------------
+    0..2    versione del protocollo, uint16 big-endian
+    2       tipo di messaggio, 0x01 (msgTypeInitiation)
+    3..5    lunghezza del payload, uint16 big-endian = 96
+    5..37   chiave pubblica effimera del client, in chiaro
+    37..85  chiave pubblica della macchina del client, cifrata (32 + 16 di tag)
+    85..101 tag AEAD che autentica tutto il messaggio
+
+    init.Len            = 101 = 5 (header) + 96 (payload)
+    init.Payload().Len  = 96  = 32 + 48
+    init.MachinePub()   = 48  = 32 + 16
+
+Layout del messaggio di risposta (51 byte)
+------------------------------------------
+    0       tipo di messaggio, 0x02 (msgTypeResponse)
+    1..3    lunghezza del payload, uint16 big-endian = 48
+    3..35   chiave pubblica effimera del server, in chiaro
+    35..51  tag AEAD che autentica il messaggio
+
+    resp.Len            = 51 = 3 (header) + 48 (payload)
+    resp.Payload().Len  = 48 = 32 + 16
+
+Layout di un frame di trasporto (Task 8)
+----------------------------------------
+    0       tipo di messaggio, 0x04 (msgTypeRecord)
+    1..3    lunghezza del ciphertext, uint16 big-endian = plaintext + 16
+    3..     ciphertext AEAD (testo + tag)
+
+    maxMessageSize    = 4096  (frame completo, header incluso)
+    maxCiphertextSize = 4093
+    maxPlaintextSize  = 4077
+
+Sequenza dell'handshake (dal sorgente, non ricostruita)
+-------------------------------------------------------
+    h  = ck = BLAKE2s("Noise_IK_25519_ChaChaPoly_BLAKE2s")
+    mixHash(prologo)              prologo = "Tailscale Control Protocol v" + versione decimale
+    mixHash(chiave pubblica del server)          <- s
+    -> e, es, s, ss
+       mixHash(effimera del client)
+       mixDH(effimera client, pubblica server)   es
+       encryptAndHash(chiave pubblica macchina)  s   (48 byte, AAD = h)
+       mixDH(privata macchina, pubblica server)  ss
+       encryptAndHash(payload vuoto)                 (16 byte, solo tag)
+    <- e, ee, se
+       mixHash(effimera del server)
+       mixDH(effimera client, effimera server)   ee
+       mixDH(privata macchina, effimera server)  se
+       decryptAndHash(tag della risposta)
+    split -> k1, k2 (due blocchi di HKDF-BLAKE2s con ck come salt)
+
+Dettagli che sono facili da sbagliare
+-------------------------------------
+  - HKDF e' istanziato su BLAKE2s, non su SHA-256: MixDH produce due blocchi da
+    32 byte, il primo aggiorna ck, il secondo e' la chiave AEAD monouso.
+  - L'AEAD di handshake usa SEMPRE il nonce zero (singleUseCHP in handshake.go):
+    una chiave, una sola operazione.
+  - L'AAD e' h, e h viene aggiornato con il ciphertext (tag incluso), non con il
+    testo in chiaro.
+  - Il nonce del trasporto e' 4 byte a zero piu' il contatore a 64 bit
+    big-endian (tipo nonce in conn.go): il nonce 0 e' tutto zero.
+  - Il ciphertext di handshake non porta alcun padding: crypto_box nel formato
+    x/crypto/nacl/box ha 16 byte di overhead, non 32.
+  - I byte 0..5 della initiation (versione, tipo, lunghezza) sono coperti dal tag
+    perche' h dipende dal prologo, che dipende dalla versione.
