@@ -1,0 +1,18 @@
+{
+  "refs": [
+    {
+      "repo": "tailscale/tailscale",
+      "kind": "tag",
+      "ref": "v1.104.1",
+      "sha256": "bf868b2b1a46b9485d55bcda12c2d7573279ce4474bc6d607f42f1495db36ed8",
+      "note": "control plane ts2021 (controlbase, controlhttp, controlclient), tailcfg, DERP. Fonte delle costanti di ProtocolConstants."
+    },
+    {
+      "repo": "tailscale/wireguard-go",
+      "kind": "commit",
+      "ref": "417aef361226",
+      "sha256": "596a8c1a2ec368cb93d9f8b05a171918fe33a1ad1df8caa6eac3aa7a4bb083c7",
+      "note": "data plane del Piano 2: e' la revisione che tailscale v1.104.1 importa (go.mod, github.com/tailscale/wireguard-go). Pinnata a commit invece che a tag perche' il fork non pubblica release allineate."
+    }
+  ]
+}
