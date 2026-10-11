@@ -122,6 +122,14 @@ namespace Tailscale.Core.Control
         public Func<string, bool> BrowserOpener;
 
         public int MapWatchdogSeconds = ProtocolConstants.MapStreamWatchdogSeconds;
+
+        /// <summary>
+        /// Quante volte si rifa' il canale di controllo prima di mostrare l'errore.
+        /// Un'interruzione del sistema (app sospesa, socket chiuso) e' passeggera:
+        /// un guasto definitivo no, e dopo qualche tentativo va detto all'utente
+        /// invece di ritentare per sempre.
+        /// </summary>
+        public int MaxChannelRetries = 5;
         public int LoginPollMilliseconds = 3000;
         public int LoginTimeoutSeconds = 600;
 
@@ -420,6 +428,9 @@ namespace Tailscale.Core.Control
             // un 401 arrivato dopo il primo non ricaricherebbe piu' nulla e
             // resterebbe un errore definitivo anche quando basta rifare l'handshake.
             _reloadedKeys = false;
+            // E i tentativi sul canale: un nuovo Start e' una nuova occasione, non
+            // l'erede del budget speso dal precedente.
+            _channelRetries = 0;
             // Vale per questa connessione, non per la vita del processo: azzerato qui
             // perche' un nuovo Start deve poter ritentare con un'identita' nuova.
             _identityRefreshes = 0;
@@ -452,8 +463,6 @@ namespace Tailscale.Core.Control
         /// </summary>
         private bool Register()
         {
-            EnsureConnection();
-
             bool sentFollowup = false;
             int waitedSeconds = 0;
 
@@ -479,8 +488,37 @@ namespace Tailscale.Core.Control
                                  + ", atteso " + waitedSeconds + "s, nodeKey="
                                  + Short(request.NodeKey) + ", " + body.Length + " byte)");
 
-                ControlResponse response = _connection.Post(
-                    ProtocolConstants.RegisterPath, body, headers);
+                ControlResponse response;
+                try
+                {
+                    // Il canale si ricostruisce qui, dentro la zona protetta: dopo un
+                    // guasto _connection e' null, e un dial che fallisce e' anch'esso
+                    // passeggero.
+                    EnsureConnection();
+                    response = _connection.Post(ProtocolConstants.RegisterPath, body, headers);
+                }
+                catch (ControlStreamException ex)
+                {
+                    // Un arresto voluto non e' un errore: il pulsante "Ferma" e la
+                    // sospensione dell'app passano di qui.
+                    if (_stopping)
+                    {
+                        _options.Log.Log("registrazione interrotta: il motore e' in arresto");
+                        return false;
+                    }
+                    if (!RecoverFromChannelFailure("la registrazione", ex)) return false;
+                    continue;
+                }
+                catch (IOException ex)
+                {
+                    if (_stopping)
+                    {
+                        _options.Log.Log("registrazione interrotta: il motore e' in arresto");
+                        return false;
+                    }
+                    if (!RecoverFromChannelFailure("il canale di controllo", ex)) return false;
+                    continue;
+                }
 
                 _options.Log.Log("registrazione: risposta http " + response.StatusCode
                                  + ", " + (response.Body == null ? 0 : response.Body.Length) + " byte");
@@ -491,7 +529,6 @@ namespace Tailscale.Core.Control
                     // che la node key e' gia' nota, l'unica via e' un'identita' nuova.
                     if (RecoverFromDuplicateIdentity(response.Body))
                     {
-                        EnsureConnection();
                         continue;
                     }
 
@@ -499,7 +536,6 @@ namespace Tailscale.Core.Control
                     // ruotato le chiavi: si ricaricano e si riprova una volta sola.
                     if (ReloadServerKeysAndReconnect(response.StatusCode))
                     {
-                        EnsureConnection();
                         continue;
                     }
 
@@ -527,7 +563,6 @@ namespace Tailscale.Core.Control
                 {
                     if (RecoverFromDuplicateIdentity(parsed.Error))
                     {
-                        EnsureConnection();
                         sentFollowup = false;
                         continue;
                     }
@@ -638,6 +673,37 @@ namespace Tailscale.Core.Control
             for (int i = 0; i < seconds * 10 && !_stopping; i++)
                 _options.Sleep(100);
             return !_stopping;
+        }
+
+        /// <summary>Quanti canali si sono gia' rifatti in questa connessione.</summary>
+        private int _channelRetries;
+
+        /// <summary>
+        /// Un guasto del canale di controllo mentre si registra: il canale si butta
+        /// e si rifa' dopo il backoff. E' passeggero per costruzione (il sistema
+        /// interrompe una lettura quando sospende l'app, o quando il socket muore),
+        /// quindi non deve fermare il motore -- ma non e' nemmeno infinito: dopo il
+        /// tetto l'errore va mostrato.
+        ///
+        /// Restituisce false quando il motore e' in arresto o il budget e' finito:
+        /// in entrambi i casi il ciclo della registrazione deve uscire.
+        /// </summary>
+        private bool RecoverFromChannelFailure(string what, Exception ex)
+        {
+            _channelRetries++;
+            if (_channelRetries > _options.MaxChannelRetries)
+            {
+                _options.Log.Log("canale di controllo non disponibile dopo " + _options.MaxChannelRetries
+                                 + " tentativi (" + ex.Message + ")");
+                SetState(ControlState.Error, null,
+                         "canale di controllo non disponibile: nuovo tentativo fra poco");
+                return false;
+            }
+
+            _options.Log.Log("canale di controllo interrotto durante " + what + ": lo rifaccio ("
+                             + _channelRetries + " di " + _options.MaxChannelRetries + ")");
+            DisposeConnection();
+            return BackoffBeforeReconnect();
         }
 
         private void ReadMapOnce()
