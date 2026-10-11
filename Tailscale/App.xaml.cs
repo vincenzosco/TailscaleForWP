@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using Tailscale.Services;
 using Windows.ApplicationModel;
 using Windows.ApplicationModel.Activation;
 using Windows.UI.Xaml;
@@ -21,6 +22,7 @@ namespace Tailscale
             this.InitializeComponent();
             // In VB l'aggancio era dichiarativo (Handles Me.Suspending).
             this.Suspending += OnSuspending;
+            this.Resuming += OnResuming;
         }
 
         protected override void OnLaunched(LaunchActivatedEventArgs e)
@@ -92,11 +94,24 @@ namespace Tailscale
         {
             SuspendingDeferral deferral = e.SuspendingOperation.GetDeferral();
 
-            // Task 11 del Piano 1 / Task 11 del Piano 2: qui va salvato lo stato
-            // e vanno chiusi i socket. Un socket lungo in sospensione viene
-            // comunque terminato dal sistema.
+            // Il socket lo chiudiamo noi, prima che lo faccia il sistema: cosi' la
+            // lettura in corso e' un arresto voluto e non un errore da mostrare.
+            // (Lo stato su disco e' gia' scritto dal client appena cambia: le chiavi
+            // e l'identita' autorizzata non dipendono da questo momento.)
+            EngineService.Current.Suspend();
 
             deferral.Complete();
+        }
+
+        /// <summary>
+        /// L'app torna in primo piano. Il socket di prima non esiste piu': il motore
+        /// riparte, rifa' il canale e rilegge la netmap. La pagina non viene
+        /// rinavigata, quindi e' questo l'unico punto in cui il motore puo' rimettersi
+        /// in moto.
+        /// </summary>
+        private void OnResuming(object sender, object e)
+        {
+            EngineService.Current.Resume();
         }
     }
 }
