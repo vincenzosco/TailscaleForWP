@@ -26,8 +26,9 @@ comandi da copiare e i file da aprire.
 
 ## La regola che le tiene vere
 
-Ogni percorso, comando, simbolo (`percorso/file.cs#Membro`) e riga di registro
-(marcata `log:<testo>`) citato qui dentro è verificato dal codice vero da
+Ogni percorso, comando, simbolo (citato come `<percorso>/<file>.cs#<Membro>`) e
+riga di registro (marcata `log:<testo>`) citato qui dentro è verificato dal
+codice vero da
 `tools/check-agents.py`, che gira dentro `tools\check-all.cmd` prima dei test.
 
 Quindi: **se cambi il codice, aggiorna la skill.** Se l'aggiornamento manca, il
