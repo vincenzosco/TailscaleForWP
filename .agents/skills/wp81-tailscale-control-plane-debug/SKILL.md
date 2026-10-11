@@ -73,6 +73,10 @@ socket morto, ed è per questo che il client lo distingue.
 | `log:canale di controllo non disponibile dopo ` | il canale non torna: budget esaurito durante la registrazione | guasto vero: raccogliere le righe precedenti, non è una sospensione |
 | `log:login non completato entro ` | la finestra di login è finita senza che il browser risultasse usato (`src/Tailscale.Core/Control/ControlClient.cs#RemainingLoginSeconds`) | l'URL resta valido: l'utente lo riapre dal pulsante |
 | `log:nodo autorizzato; ultimo login: ` | la registrazione è conclusa: da qui in poi la netmap si legge da sola | nessuna |
+| `log:registro su file: ` | all'avvio: dice **dove** l'app scrive il registro sul telefono | nessuna: è l'informazione che serve per tirarlo fuori con `ISETool.exe` |
+| `log:il motore non parte: la sorgente casuale del sistema non e' utilizzabile` | la sorgente casuale non passa il controllo, quindi l'app **non** costruisce il client di proposito (`src/Tailscale.Core/Util/RandomSourceCheck.cs#IsUsable`) | guasto vero del dispositivo: con quella sorgente l'identità sarebbe la stessa a ogni avvio e il server rifiuterebbe la node key |
+| `log:portachiavi: l'identita' non sopravvivera' al riavvio` | il portachiavi accetta la scrittura ma restituisce altro in lettura: il dispositivo apparirà nuovo a ogni avvio | non fatale, ma va riportato: il tailnet si riempie di dispositivi doppi |
+| `log:registro su file non disponibile: ` | il file del registro non è scrivibile: la diagnosi resta solo a schermo, e sparisce con l'app | dirlo quando si riporta il problema, perché le righe che mancano sono quelle |
 
 ## 4. Cosa fare quando si riporta il problema
 
@@ -86,7 +90,29 @@ E cosa **non** incollare mai: chiavi private di qualunque forma, e l'URL di logi
 completo (basta dire "URL di login aperto"). Il controllo `tools/check-agents.py`
 cerca questi pattern nelle skill proprio perché è facile farlo per sbaglio.
 
-## 5. Cosa **non** è un guasto
+## 5. La diagnosi sopravvive all'app: il registro su file
+
+Il Registro a schermo vive in memoria (`src/Tailscale.Core/Util/Log.cs#RingLogSink`,
+200 righe) e muore con l'app. Ogni riga va **anche** su file,
+`LocalFolder\registro.log`, con una coda limitata (400 righe): è la differenza fra
+un guasto che lascia una prova e uno che lascia uno screenshoot, ed è il motivo per
+cui si può chiedere il registro invece di chiedere un debugger collegato.
+
+Il file si tira fuori dal telefono con lo strumento dell'SDK (`ISETool.exe`, in
+`IsolatedStorageExplorerTool` dentro `Windows Phone/v8.1/Tools`):
+
+```
+ISETool.exe EnumerateDevices                                              (cosa c'e' collegato)
+ISETool.exe ts de 563a8f70-0e06-4690-b075-3963581a75c8 C:\temp\registro   (telefono collegato)
+ISETool.exe ts xd 563a8f70-0e06-4690-b075-3963581a75c8 C:\temp\registro   (emulatore predefinito)
+```
+
+`de` è un telefono e `xd` l'emulatore predefinito; il product id è il
+`PhoneProductId` di `Tailscale/Package.appxmanifest`. Se il file non c'è, la prima
+riga da cercare è `log:registro su file: `, che dice dove l'app crede di scrivere:
+un registro che manca si spiega con quella riga, non con un'ipotesi.
+
+## 6. Cosa **non** è un guasto
 
 - La sospensione dell'app che interrompe una lettura: è l'app che chiude il
   socket di proposito. Al ritorno in primo piano riparte da sola con l'identità

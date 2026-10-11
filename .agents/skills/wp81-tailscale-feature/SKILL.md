@@ -49,6 +49,12 @@ Cosa non fare:
   righe esistenti è nella skill `wp81-tailscale-control-plane-debug`; una riga
   nuova va aggiunta lì, altrimenti il controllo del Task 7 del piano 15 non la
   vede.
+- **Niente decisioni in un file che si compila solo per il telefono**: se una
+  scelta (cosa salvare, quando tagliare una coda, cosa fare quando una lettura
+  restituisce altro) sta in `Tailscale/Services/`, nessuno la verifica finché non
+  arriva un dispositivo — ed è così che sono nati i quattro guasti trovati
+  leggendo il codice del telefono. La scelta va nel core con il suo test;
+  nell'app resta la chiamata WinRT, e a verificarla è la build ARM.
 - **Niente chiavi private nei log**, mai, nemmeno in forma abbreviata se
   abbreviare lascia indovinare.
 
@@ -58,7 +64,8 @@ Cosa non fare:
 |---|---|
 | `Tailscale/Services/EngineService.cs` | il motore dentro l'app: avvia e ferma il client, espone stato e lista peer alla schermata |
 | `Tailscale/Services/PhonePlatform.cs` | adattatori WP8.1: socket, sorgente casuale, fetcher, attesa |
-| `Tailscale/Services/PhoneStores.cs` | persistenza sul telefono |
+| `Tailscale/Services/PhoneStores.cs` | persistenza sul telefono: **solo** gli adattatori (`PasswordVaultAdapter`, `LocalSettingsAdapter`), senza decisioni — la politica «segreto nel portachiavi, preferenze nelle impostazioni» sta in `src/Tailscale.Core/Util/VaultBackedStateStore.cs` |
+| `Tailscale/Services/PhoneLogFile.cs` | il file del registro: l'unico punto che tocca `StorageFile` e `FileIO`; quando tagliare e cosa fare se fallisce è in `src/Tailscale.Core/Util/TextFileLog.cs` |
 | `Tailscale/MainPage.xaml` + `Tailscale/MainPage.xaml.cs` | la schermata: stato, login, lista peer, pannello Registro |
 | `Tailscale/Resources/Strings/it-IT/Resources.resw` | le stringhe visibili all'utente, in italiano |
 
