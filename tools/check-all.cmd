@@ -28,6 +28,14 @@ if exist tools\check-ui-resources.py (
   python tools\check-ui-resources.py || exit /b 1
 )
 
+rem Le skill degli agent devono descrivere il codice che c'e' davvero: un file
+rem rinominato o una riga di registro cambiata senza aggiornare la skill e' una
+rem istruzione che manda a cercare qualcosa che non esiste.
+if exist tools\check-agents.py (
+  echo [0/5] Skill degli agent
+  python tools\check-agents.py || exit /b 1
+)
+
 rem Anteprima e OCR dipendono da Pillow e da Tesseract, che non sono prerequisiti
 rem del progetto: se mancano si dice che il controllo e' saltato (non "passato"),
 rem perche' un salto silenzioso sarebbe una verifica dichiarata e non fatta.
