@@ -19,7 +19,15 @@ La procedura completa, con il perché di ogni voce, è nella skill
       (per l'emulatore `ts xd`, stesso product id; per sapere cosa è collegato
       `ISETool.exe EnumerateDevices`). Lo strumento non è nel repository: sta
       nell'SDK, in `IsolatedStorageExplorerTool` dentro `Microsoft SDKs\Windows Phone\v8.1\Tools`
-      — Ultima esecuzione: non ancora eseguita
+      — Ultima esecuzione: 2026-10-11, su un dispositivo vero. Il registro è stato
+      tirato giù con `ISETool.exe ts de` e mostra: registro su file scritto nella
+      cartella dell'app, portachiavi salvato e riletto identico, handshake ts2021
+      contro `controlplane.tailscale.com`, `http: /machine/register -> 200` con il
+      nodo autorizzato, netmap aperta e stato `Authorized`, e l'abort `0x800703E3`
+      riconosciuto e registrato dopo una chiusura voluta. Il motore è stato
+      riavviato **con la stessa node key**: un solo dispositivo nel tailnet.
+      Resta non dimostrato il passo nel browser di un primo login (il dispositivo
+      di quel registro era già autorizzato).
 
 ## Trimestrale
 
