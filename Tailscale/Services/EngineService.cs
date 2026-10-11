@@ -21,6 +21,9 @@ namespace Tailscale.Services
     {
         private const int LogLines = 200;
 
+        /// <summary>Un'ora: l'app resta in ascolto dell'esito del login finche' e' aperta.</summary>
+        private const int PhoneLoginSeconds = 3600;
+
         private readonly RingLogSink _log = new RingLogSink(LogLines);
         private readonly object _gate = new object();
 
@@ -103,6 +106,11 @@ namespace Tailscale.Services
                 try { Task.Delay(milliseconds).Wait(); }
                 catch (Exception) { }
             };
+            // Il telefono non e' un comando: l'utente puo' metterci minuti ad accedere
+            // nel browser. Il client continua a chiedere al server finche' l'app e' viva,
+            // invece di arrendersi dopo dieci minuti e lasciare la pagina ferma su
+            // "Accesso richiesto" anche se l'accesso e' stato completato.
+            options.LoginTimeoutSeconds = PhoneLoginSeconds;
 
             RandomSourceIsUsable(options.Random, _log);
 
