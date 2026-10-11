@@ -178,16 +178,18 @@ namespace Tailscale.Core.Control
             _options = options;
 
             // Prima si recupera quello che c'e' gia'. Le chiavi salvate si riusano
-            // solo se l'ultimo esito e' stato un'autorizzazione, o se c'e' un login
-            // gia' in corso (il cui URL e' legato a quella node key); altrimenti il
-            // tentativo di login parte da un'identita' nuova. E' la chiave vecchia,
-            // nota al server anche dopo la cancellazione del device dal pannello
-            // admin, a produrre "device with nodekey:... already exists".
+            // **solo** se l'ultimo esito e' stato un'autorizzazione; ogni altro avvio
+            // e' un nuovo tentativo di login e parte da un'identita' nuova. E' la
+            // chiave vecchia, nota al server anche dopo la cancellazione del device
+            // dal pannello admin, a produrre "device with nodekey:... already exists".
+            //
+            // Un login rimasto in sospeso non fa eccezione: l'URL salvato riproporrebbe
+            // la stessa node key, che e' esattamente cio' che il server rifiuta, quindi
+            // l'identita' vecchia e il suo URL vengono scartati insieme.
             if (_options.State != null) RestoreState();
 
             bool hasStoredIdentity = _options.MachineKeyPair != null && _options.NodeKey != null;
-            if (hasStoredIdentity && _options.State != null
-                && _status.LoginUrl == null && !HasAuthorizedIdentity())
+            if (hasStoredIdentity && _options.State != null && !HasAuthorizedIdentity())
             {
                 RegenerateIdentity();
             }
@@ -302,6 +304,10 @@ namespace Tailscale.Core.Control
             SaveMachineKey();
             SaveNodeKey();
             if (_options.State != null) _options.State.Delete(StateAuthorized);
+            // L'URL di login e' legato all'identita' appena scartata: se resta, l'app
+            // invita ad aprire un link che il server non riconosce piu'.
+            SaveAuthUrl(null);
+            lock (_gate) _status.LoginUrl = null;
             DisposeConnection();
         }
 

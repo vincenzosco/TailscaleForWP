@@ -21,7 +21,7 @@ namespace Tailscale.Core.Tests
         {
             Case("riavvio: stesse chiavi", RestartKeepsKeys);
             Case("identita' nuova a ogni login", FreshIdentityForEachLoginAttempt);
-            Case("login in corso: identita' conservata", PendingLoginKeepsIdentity);
+            Case("login in sospeso: identita' nuova", PendingLoginStartsFresh);
             Case("login senza browser", NeedLoginSurvivesWithoutBrowser);
             Case("corpo UTF-8", BodyKeepsAccents);
             Case("errore duplicato: recupero", RecoversFromDuplicateIdentityError);
@@ -107,21 +107,25 @@ namespace Tailscale.Core.Tests
         }
 
         /// <summary>
-        /// Un login gia' in corso ha l'URL legato a questa node key: rigenerarla lo
-        /// invaliderebbe, quindi le chiavi si conservano finche' non si conclude.
+        /// Un login rimasto in sospeso non deve inchiodare l'identita': e' proprio
+        /// l'URL salvato a riproporre la node key che il server conosce ancora, e
+        /// quindi a far ricomparire "device already exists" nel browser.
         /// </summary>
-        private static void PendingLoginKeepsIdentity()
+        private static void PendingLoginStartsFresh()
         {
             MemoryStateStore store = new MemoryStateStore();
-            string nodeKey = "nodekey:" + new string('c', 64);
-            store.Write("machineKey", KeyMaterial.SavePrivate(KeyPair.Generate(new SequenceRandomSource())));
-            store.Write("nodeKey", nodeKey);
+            store.Write("machineKey", KeyMaterial.SavePrivate(KeyPair.Generate(new SequenceRandomSource(90))));
+            store.Write("nodeKey", "nodekey:" + new string('c', 64));
             store.Write("authUrl", "https://login.tailscale.com/a/pending");
 
-            // Solo il costruttore: l'URL non va invalidato.
             ControlClient client = new ControlClient(Options(store, new FakeConnection()));
-            T.Eq(nodeKey, client.NodeKey.ToString(), "login in corso: la node key non cambia");
-            T.Eq(nodeKey, store.Read("nodeKey"), "login in corso: nemmeno nello store");
+
+            T.True(client.NodeKey.ToString() != "nodekey:" + new string('c', 64),
+                   "login in sospeso: la node key salvata non si riusa");
+            T.Eq(client.NodeKey.ToString(), store.Read("nodeKey"),
+                 "login in sospeso: la nuova node key e' persistita");
+            T.Eq(null, store.Read("authUrl"), "login in sospeso: l'URL vecchio viene dimenticato");
+            T.Eq(null, client.LoginUrl, "login in sospeso: non si ripropone l'URL vecchio");
         }
 
         private static void NeedLoginSurvivesWithoutBrowser()
@@ -141,10 +145,11 @@ namespace Tailscale.Core.Tests
                  "senza browser lo stato resta NeedLogin, non Error");
             T.Eq(url, store.Read("authUrl"), "l'URL e' salvato per il prossimo avvio");
 
-            // Un riavvio lo ritrova senza doverlo richiedere al server.
+            // Un riavvio non ripropone l'URL: appartiene a un'identita' che il nuovo
+            // avvio scarta, quindi il client ne otterra' uno nuovo registrandosi.
             ControlClientOptions options = Options(store, new FakeConnection());
             ControlClient restarted = new ControlClient(options);
-            T.Eq(url, restarted.LoginUrl, "dopo il riavvio l'URL e' ancora li'");
+            T.Eq(null, restarted.LoginUrl, "dopo il riavvio l'URL vecchio non viene riproposto");
 
             // E quando il nodo risulta autorizzato, l'URL sparisce dallo store.
             FakeConnection authorized = new FakeConnection();
