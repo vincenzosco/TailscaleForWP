@@ -13,6 +13,9 @@ namespace Tailscale.Core.Tests
             Run("protocol constants", ProtocolConstantsTests.Run);
             Run("x25519", X25519Tests.Run);
             Run("chacha20poly1305", ChaCha20Poly1305Tests.Run);
+            Run("blake2s", Blake2sTests.Run);
+            Run("sha256", Sha256Tests.Run);
+            Run("hkdf", HkdfTests.Run);
 
             Console.WriteLine(T.Failures == 0 ? "ALL PASS" : "FAILURES: " + T.Failures);
             return T.Failures;
