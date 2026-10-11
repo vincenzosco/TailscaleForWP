@@ -178,24 +178,25 @@ namespace Tailscale.Core.Control
             _options = options;
 
             // Prima si recupera quello che c'e' gia'. Le chiavi salvate si riusano
-            // **solo** se l'ultimo esito e' stato un'autorizzazione; ogni altro avvio
-            // e' un nuovo tentativo di login e parte da un'identita' nuova. E' la
-            // chiave vecchia, nota al server anche dopo la cancellazione del device
+            // quando il server le ha gia' accettate: il nodo e' autorizzato, oppure un
+            // login e' stato consegnato al browser e l'utente sta per completarlo.
+            // Ogni altro avvio e' un tentativo nuovo e parte da un'identita' nuova: e'
+            // la chiave vecchia, nota al server anche dopo la cancellazione del device
             // dal pannello admin, a produrre "device with nodekey:... already exists".
-            //
-            // Un login rimasto in sospeso non fa eccezione: l'URL salvato riproporrebbe
-            // la stessa node key, che e' esattamente cio' che il server rifiuta, quindi
-            // l'identita' vecchia e il suo URL vengono scartati insieme.
             if (_options.State != null) RestoreState();
 
-            // Serve un'identita' completa **e** autorizzata. Se una delle due chiavi
-            // manca — per esempio perche' quella salvata era degenere e RestoreState
-            // l'ha scartata — si rigenera tutto: una machine key nuova con una node key
-            // vecchia non e' un'identita', e' la chiave che il server rifiuta.
+            // Un login in sospeso conserva la sua identita': l'URL e' legato a questa
+            // node key, e scartarla al riavvio lascerebbe orfana l'autorizzazione che
+            // l'utente ha appena fatto nel browser (l'app non si aggiornerebbe mai).
+            //
+            // Se una delle due chiavi manca — per esempio perche' quella salvata era
+            // degenere e RestoreState l'ha scartata — si rigenera tutto: una machine key
+            // nuova con una node key vecchia non e' un'identita', e' la chiave che il
+            // server rifiuta.
             bool reusable = _options.State != null
                             && _options.MachineKeyPair != null
                             && _options.NodeKey != null
-                            && HasAuthorizedIdentity();
+                            && (HasAuthorizedIdentity() || _status.LoginUrl != null);
             if (_options.State != null && !reusable)
             {
                 RegenerateIdentity();
