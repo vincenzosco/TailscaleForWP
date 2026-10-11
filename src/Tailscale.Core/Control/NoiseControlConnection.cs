@@ -78,7 +78,9 @@ namespace Tailscale.Core.Control
 
         public ControlResponse Post(string path, string jsonBody, List<KeyValuePair<string, string>> headers)
         {
-            byte[] body = jsonBody == null ? new byte[0] : Ascii.GetBytes(jsonBody);
+            // UTF-8, non ASCII: un hostname con accenti altrimenti diventa '?' e il
+            // server vede un altro dispositivo senza che nulla lo segnali.
+            byte[] body = jsonBody == null ? new byte[0] : Text.Utf8Bytes(jsonBody);
             _log.Log("http: POST " + path + " (" + body.Length + " byte, "
                      + (headers == null ? 0 : headers.Count) + " header aggiuntivi)");
 
@@ -130,7 +132,7 @@ namespace Tailscale.Core.Control
             string path, string jsonBody, List<KeyValuePair<string, string>> headers,
             Action<string> onJson, int watchdogSeconds)
         {
-            byte[] body = jsonBody == null ? new byte[0] : Ascii.GetBytes(jsonBody);
+            byte[] body = jsonBody == null ? new byte[0] : Text.Utf8Bytes(jsonBody);
             _log.Log("map: apro lo stream su " + path + " (watchdog " + watchdogSeconds
                      + "s, " + body.Length + " byte di richiesta)");
 
