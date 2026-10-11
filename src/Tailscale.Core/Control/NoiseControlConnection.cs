@@ -59,20 +59,16 @@ namespace Tailscale.Core.Control
         }
 
         /// <summary>
-        /// Il client HTTP/2, creato alla prima richiesta: e' il momento in cui si
-        /// legge l'eventuale early payload, perche' prima dell'handshake quei byte
-        /// non possono ancora essere arrivati.
+        /// Il client HTTP/2, creato alla prima richiesta.
+        ///
+        /// L'eventuale early payload non si legge qui: lo consuma il client HTTP/2
+        /// alla sua prima lettura, cioe' dopo aver mandato la prefazione. Leggerlo
+        /// in questo punto significherebbe attendere 9 byte che un server senza
+        /// early payload non manda finche' non ha visto la prefazione.
         /// </summary>
         private Http2Connection Http2()
         {
-            if (_http2 == null)
-            {
-                string json;
-                if (EarlyPayload.TryConsume(_stream, _log, out json))
-                    _log.Log("canale di controllo: early payload letto (" + (json == null ? 0 : json.Length) + " byte)");
-
-                _http2 = new Http2Connection(_stream, _log);
-            }
+            if (_http2 == null) _http2 = new Http2Connection(_stream, _log);
             return _http2;
         }
 
@@ -180,7 +176,9 @@ namespace Tailscale.Core.Control
                     watchdog.KeepAlive();
                     messages++;
 
-                    onJson(Latin1(message));
+                    // UTF-8: i messaggi sono JSON, e un nome di peer con accenti
+                    // sono due byte per carattere.
+                    onJson(Text.FromUtf8(message));
                 }
             }
 
@@ -242,14 +240,6 @@ namespace Tailscale.Core.Control
             {
                 _timer.Dispose();
             }
-        }
-
-        /// <summary>I byte sono latin-1 (JSON ASCII): non si passa per la codifica di sistema.</summary>
-        private static string Latin1(byte[] bytes)
-        {
-            char[] chars = new char[bytes.Length];
-            for (int i = 0; i < bytes.Length; i++) chars[i] = (char)bytes[i];
-            return new string(chars);
         }
 
         private static string Short(string text)

@@ -1,5 +1,167 @@
 # TailscaleForWP
 
+**English** (default) | [Italiano](#italiano)
+
+A **Tailscale client for Windows Phone 8.1**: a WP8.1 app with a portable engine
+written in C# 5, built by reading the pinned Tailscale source instead of from
+memory.
+
+The project starts from one precise question: can the Tailscale control protocol
+(ts2021, Noise IK) be spoken from a 2014 phone that only has .NET 4.5 and the
+WP8.1 reference profile? So far the answer is **yes for the handshake** — and this
+repository contains the proof, not just the code.
+
+## Status
+
+| Component | Status | How it is verified |
+|---|---|---|
+| Cryptographic primitives (X25519, ChaCha20-Poly1305, BLAKE2s, SHA-256, HKDF, NaCl box) | **Done** | RFC 7748 / 8439 / 7693 / 5869 vectors and independent TweetNaCl vectors |
+| Noise IK handshake (controlbase) | **Done** | **Against the real server**: `Tailscale.Cli handshake` |
+| Server keys, ts2021 dialer, HTTP upgrade | **Done** | `Tailscale.Cli handshake` against `controlplane.tailscale.com` |
+| Noise transport framing | **Done** | In-memory tests, including authentication of every byte |
+| Node registration, netmap, login URL | **In progress, blocked** | The server speaks **HTTP/2** inside Noise; see "Known limitations" |
+| App UI (login, peer list) | Not started | — |
+| Logos and splash screens | **Done** | The package contains the images byte for byte |
+| Localization (en-US, it-IT) | Resources done | The `it` language package contains the translated strings; the accessor is missing |
+
+Honest detail: **the app cannot log in yet**. The handshake works against the
+real server, registration does not. The reason is documented with the evidence,
+not hidden: see `docs/superpowers/plans/2026-10-11-wp81-tailscale-1-control-plane-login.md`.
+
+## The proof that matters
+
+```
+$ src/Tailscale.Cli/bin/Release/Tailscale.Cli.exe handshake
+server key ts2021=mkey:7d2792f9c98d753d2042471536801949104c247f95eac770f8fb321595e2173b
+            legacy=mkey:9e5156a4c65121306dd2d8ed8f92cb8d738e2533011344b522c5d28409bc4970
+ts2021: upgrade accettato su http://controlplane.tailscale.com:80
+handshake ok, peer=mkey:7d2792f9c98d753d2042471536801949104c247f95eac770f8fb321595e2173b
+handshake hash=4754800d5370c4209dde12d541b20b85528d6787e1fbb13bd666d21693d0c973
+versione del protocollo=148
+```
+
+Why this is a proof of interoperability and not a round-trip with itself: the
+real server accepts our 101-byte message 1 and replies with a message whose tag
+verifies against the public key it publishes at `/key`. If our transcription of
+Noise IK, HKDF-BLAKE2s, X25519 or ChaCha20-Poly1305 were wrong, that tag would
+not verify.
+
+## How to build and verify
+
+Everything goes through a single command:
+
+```bash
+tools/check-all.cmd
+```
+
+which runs, in this order: the protocol pin check, the desktop core build, the
+test build, the tests, the CLI build with its offline `selftest`, and the ARM
+build of the WP8.1 app (including the package). It exits with a non-zero code at
+the first problem. Expected: `CHECK-ALL OK`.
+
+The ARM build is not an extra: it is the check that found **every** platform
+constraint in this project. The WP8.1 profile has no
+`System.Security.Cryptography`, `Encoding.ASCII`, `System.Net.Sockets`,
+`Stream.Close()`, `Environment.OSVersion`, `List.AsReadOnly()`, and only an
+asynchronous `HttpWebRequest`. All of these constraints are the reason the core
+injects `IRandomSource`, `IStreamConnector`, `IHttpFetcher` and `Sleep` instead
+of calling an API directly.
+
+Manual checks that need the network (not in the pipeline, because they must not
+depend on tailscale.com):
+
+```bash
+src/Tailscale.Cli/bin/Release/Tailscale.Cli.exe handshake   # handshake against the real server
+src/Tailscale.Cli/bin/Release/Tailscale.Cli.exe probe       # HTTP/2 diagnostics
+src/Tailscale.Cli/bin/Release/Tailscale.Cli.exe login       # registration (blocked, see below)
+```
+
+## How it is built
+
+The same engine source is compiled **twice**: as a desktop library
+(`src/Tailscale.Core/Tailscale.Core.Desktop.csproj`) and inside the WP8.1 app
+(`Tailscale/Tailscale.csproj`, which includes it with `<Compile Include="..\src\...">`).
+`LangVersion 5` is enforced on both, so syntax the phone's compiler rejects does
+not slip through unnoticed.
+
+```
+src/Tailscale.Core/          portable engine, no UI and no direct network access
+  Crypto/                    X25519, ChaCha20, Poly1305, BLAKE2s, SHA-256/HMAC, HKDF, Salsa20, NaCl box
+  Protocol/                  protocol constants, Noise IK handshake, framing, ts2021 dialer
+  Control/                   JSON, server keys, control client, netmap
+  Tailcfg/                   control plane requests and responses
+  Keys/                      typed keys (nodekey:, mkey:, discokey:) and key pairs
+src/Tailscale.Cli/           command-line tool for real verification
+src/Tailscale.Core.Tests/    test runner with no external dependencies
+Tailscale/                   WP8.1 app: XAML, assets, localized resources
+tools/                       verification pipeline, reference source pin, fetch
+refs/                        pinned Tailscale source (git-ignored, materialized by tools/fetch-refs.py)
+```
+
+Choices worth knowing when reading the code:
+
+- **The protocol pin is not a comment.** `tools/refs.lock` fixes the revisions of
+  `tailscale` and `wireguard-go`, and `tools/check-protocol-pin.py` compares the
+  `ProtocolConstants` against the vendored source: every value has its file and
+  line in `docs/protocol-notes.md`. If the source and the code diverge, the
+  pipeline fails.
+- **Everything that touches the network or randomness is injectable**
+  (`IRandomSource`, `IStreamConnector`, `IHttpFetcher`, `Sleep`,
+  `ConnectionFactory`): that is what allows the client's state machine to be
+  tested without a network and without a Tailscale account.
+- **The tests do not claim what they do not verify.** Where an external oracle
+  exists (RFC, TweetNaCl, Python) the test uses it; where none exists, the test
+  says so in its own comment instead of passing a round-trip off as
+  interoperability.
+
+## Known limitations
+
+1. **The control server speaks HTTP/2 inside the Noise transport.** The Go client
+   forces it (`tr.Protocols.SetUnencryptedHTTP2(true)`, `control/ts2021/client.go`),
+   and an HTTP/1.1 request is closed without a response.
+   `Control/NoiseControlConnection.cs` speaks HTTP/1.1: node registration and the
+   netmap do not work until an HTTP/2 implementation exists (preface, frames,
+   HPACK). This is the next piece of work, described in the plan of Plan 1.
+2. **Registration requires a person.** The acceptance step involves opening the
+   login URL and signing in with a Tailscale account: it cannot be automated.
+   Until then Task 10 stays unverified even with HTTP/2 in place.
+3. **No data plane.** No WireGuard, no SOCKS proxy: the app handles the control
+   plane. The data plane is Plan 2, not started.
+4. **Localization has no accessor yet.** The translated strings are in the
+   package, but Task 2 of the localization plan is missing.
+5. The plan documents and the ledger live in `docs/`, which is **git-ignored** in
+   this repository: they do not show up here on GitHub. If you need them
+   versioned, remove `docs/` from `.gitignore`.
+6. **A device deleted from the admin panel does not free the node key on the
+   server.** The client notices from the `device with nodekey:... already exists`
+   error, generates a new identity (machine key + node key) and retries. Because
+   of this, if the app was not authorized, the first login shows up as a new
+   device.
+
+## Security
+
+- No private key is ever written to the logs or printed: the CLI shows only
+  public keys, and the tests verify that the output contains no secret material.
+- The phone is meant to keep private keys in the `PasswordVault`, not in
+  `LocalSettings` (the app plan provides for it; not implemented yet).
+- The handshake is authenticated: the server's `Manifest` verifies against the
+  published key, so an intercepting proxy cannot impersonate the control server.
+  The plaintext attempt on :80 weakens nothing for this reason.
+- TLS 1.2 is required explicitly: .NET 4.5 negotiates TLS 1.0 and the control
+  server refuses it.
+
+## License
+
+Not defined yet. The reference source vendored in `refs/` (Tailscale) is
+BSD-3-Clause and is not redistributed here: it is downloaded separately by
+`tools/fetch-refs.py`.
+
+---
+
+# Italiano
+
+[English](#tailscaleforwp) | **Italiano**
+
 Un client **Tailscale per Windows Phone 8.1**: un'app WP8.1 con un motore portabile
 scritto in C# 5, costruito leggendo il sorgente di Tailscale pinnato invece che dalla
 memoria.
@@ -24,7 +186,7 @@ questo repository contiene la prova, non solo il codice.
 
 Dettaglio onesto: **l'app non fa ancora login**. L'handshake funziona contro il
 server vero, la registrazione no. Il perché è documentato con l'evidenza, non
- nascosto: vedi `docs/superpowers/plans/2026-10-11-wp81-tailscale-1-control-plane-login.md`.
+nascosto: vedi `docs/superpowers/plans/2026-10-11-wp81-tailscale-1-control-plane-login.md`.
 
 ## La prova che conta
 

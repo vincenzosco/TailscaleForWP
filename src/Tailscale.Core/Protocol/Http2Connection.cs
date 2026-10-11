@@ -72,6 +72,7 @@ namespace Tailscale.Core.Protocol
         private readonly int _receiveWindowTarget;
 
         private bool _prefaceSent;
+        private bool _earlyChecked;
         private bool _closed;
         private int _nextStreamId = 1;
         private int _peerMaxFrameSize = Http2Frame.DefaultMaxFrameSize;
@@ -187,17 +188,22 @@ namespace Tailscale.Core.Protocol
         public static string ReadBody(Stream body, int maxBytes)
         {
             if (body == null) return null;
-            StringBuilder text = new StringBuilder();
+
+            // I byte si accumulano e si convertono una volta sola. Due motivi:
+            // i corpi sono UTF-8 (un nome con accenti sono due byte per carattere,
+            // e leggerli come caratteri li storpierebbe), e decodificare a pezzi
+            // spezzerebbe in due un carattere multibyte a cavallo di due Read.
+            MemoryStream buffered = new MemoryStream();
             byte[] buffer = new byte[16 * 1024];
             while (true)
             {
                 int read = body.Read(buffer, 0, buffer.Length);
                 if (read <= 0) break;
-                if (text.Length + read > maxBytes)
+                if (buffered.Length + read > maxBytes)
                     throw new Http2Exception("corpo della risposta oltre " + maxBytes + " byte");
-                for (int i = 0; i < read; i++) text.Append((char)buffer[i]);
+                buffered.Write(buffer, 0, read);
             }
-            return text.ToString();
+            return Text.FromUtf8(buffered.ToArray());
         }
 
         /// <summary>
@@ -233,6 +239,35 @@ namespace Tailscale.Core.Protocol
             _log.Log("http2: prefazione inviata (finestra di ricezione " + _receiveWindowTarget + " byte)");
         }
 
+        /// <summary>
+        /// Legge una volta sola l'eventuale early payload, alla *prima lettura* del
+        /// canale e non alla costruzione dell'oggetto.
+        ///
+        /// L'ordine conta: l'early payload e' opzionale, e un server che non lo manda
+        /// non manda nulla finche' non ha ricevuto la nostra prefazione HTTP/2. Se la
+        /// lettura dei 9 byte di testa avvenisse prima di scrivere, il client
+        /// resterebbe appeso per sempre; la prefazione invece e' gia' partita quando
+        /// si arriva qui, esattamente come nel client Go (readHeader chiamato dalla
+        /// prima Read).
+        /// </summary>
+        private void CheckEarlyPayload()
+        {
+            if (_earlyChecked) return;
+            _earlyChecked = true;
+
+            // Solo il canale del control plane ha un early payload davanti ai frame:
+            // su uno stream qualsiasi (i test) non c'e' niente da guardare.
+            PushbackStream pushback = _stream as PushbackStream;
+            if (pushback == null) return;
+
+            string json;
+            if (EarlyPayload.TryConsume(pushback, _log, out json))
+            {
+                _log.Log("http2: early payload consumato prima del primo frame ("
+                         + (json == null ? 0 : json.Length) + " byte di JSON)");
+            }
+        }
+
         /// <summary>Legge e gestisce frame finche' lo stream non ha qualcosa da consegnare.</summary>
         private void Pump(StreamState state)
         {
@@ -255,6 +290,8 @@ namespace Tailscale.Core.Protocol
         private Http2Frame ReadFrame()
         {
             if (_closed) throw new Http2Exception("connessione HTTP/2 gia' chiusa");
+            CheckEarlyPayload();
+
             Http2Frame frame;
             try
             {
@@ -346,6 +383,16 @@ namespace Tailscale.Core.Protocol
                 switch (settings[i].Key)
                 {
                     case 5:
+                        // RFC 9113 §6.5.2: il valore ammesso va da 16384 a 16777215.
+                        // Fuori da quel range (0 compreso) il valore non si usa: con 0
+                        // il ciclo di invio del corpo non avanzerebbe piu'.
+                        if (settings[i].Value < Http2Frame.DefaultMaxFrameSize
+                            || settings[i].Value > 16777215)
+                        {
+                            _log.Log("http2: MAX_FRAME_SIZE fuori range (" + settings[i].Value
+                                     + "): lo ignoro e resto a " + _peerMaxFrameSize);
+                            break;
+                        }
                         _peerMaxFrameSize = settings[i].Value;
                         _log.Log("http2: il server accetta frame fino a " + _peerMaxFrameSize + " byte");
                         break;
@@ -440,7 +487,6 @@ namespace Tailscale.Core.Protocol
                 state.Offset = 0;
             }
 
-            state.Unconsumed += payload.Length;
             if (state.Buffer.Length - state.Offset > MaxBufferedResponse)
             {
                 _log.Log("http2: attenzione, " + (state.Buffer.Length - state.Offset)
@@ -455,9 +501,10 @@ namespace Tailscale.Core.Protocol
             int start = 0;
             int end = payload.Length;
 
-            if (frame.Type == Http2FrameType.Headers && frame.Has(Http2Frame.FlagPriority))
-                start += 5;
-
+            // L'ordine dei campi e' quello della RFC 9113 §6.2: prima Pad Length,
+            // poi (solo per HEADERS) i 5 byte di priorita', poi il blocco di header.
+            // Invertirlo sposta la lettura di 5 byte e disallinea la tabella HPACK
+            // per il resto della connessione, non solo per questa risposta.
             if (frame.Has(Http2Frame.FlagPadded))
             {
                 if (end <= start) throw new Http2Exception("frame con PADDED ma senza byte di padding");
@@ -466,6 +513,13 @@ namespace Tailscale.Core.Protocol
                 if (padding > end - start)
                     throw new Http2Exception("padding di " + padding + " byte oltre il frame");
                 end -= padding;
+            }
+
+            if (frame.Type == Http2FrameType.Headers && frame.Has(Http2Frame.FlagPriority))
+            {
+                if (end - start < 5)
+                    throw new Http2Exception("frame HEADERS con PRIORITY ma senza i 5 byte di priorita'");
+                start += 5;
             }
 
             if (start == 0 && end == payload.Length) return payload;
@@ -482,10 +536,14 @@ namespace Tailscale.Core.Protocol
         /// </summary>
         private void CreditWindow(StreamState state)
         {
-            if (state.Unconsumed < WindowUpdateThreshold) return;
+            // Si accredita quello che il lettore ha *consumato*: e' la sola
+            // grandezza che dice se la finestra puo' riaprirsi. Accreditare
+            // all'arrivo (come faceva prima) tiene la finestra sempre aperta e
+            // lascia al server la scelta di quanta memoria occuparci.
+            if (state.ConsumedSinceCredit < WindowUpdateThreshold) return;
 
-            int increment = state.Unconsumed;
-            state.Unconsumed = 0;
+            int increment = state.ConsumedSinceCredit;
+            state.ConsumedSinceCredit = 0;
 
             byte[] update = new byte[4];
             WriteUInt32(update, 0, increment);
@@ -508,6 +566,7 @@ namespace Tailscale.Core.Protocol
             int available = Math.Min(count, state.Buffer.Length - state.Offset);
             Array.Copy(state.Buffer, state.Offset, buffer, offset, available);
             state.Offset += available;
+            state.ConsumedSinceCredit += available;
             CreditWindow(state);
             return available;
         }
@@ -562,7 +621,10 @@ namespace Tailscale.Core.Protocol
             public bool Ended;
             public byte[] Buffer = new byte[0];
             public int Offset;
-            public int Unconsumed;
+
+            /// <summary>Byte consumati dal lettore e non ancora accreditati al server.</summary>
+            public int ConsumedSinceCredit;
+
             public byte[] PartialHeaderBlock;
 
             public StreamState(int id)

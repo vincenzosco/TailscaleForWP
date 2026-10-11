@@ -24,7 +24,9 @@ namespace Tailscale.Core
         public static string FromUtf8(byte[] bytes)
         {
             if (bytes == null) throw new ArgumentNullException("bytes");
-            return Encoding.UTF8.GetString(bytes);
+            // Il profilo WP8.1 non ha GetString(byte[]): si passa dagli indici, che
+            // esistono su entrambi i target.
+            return Encoding.UTF8.GetString(bytes, 0, bytes.Length);
         }
 
         /// <summary>

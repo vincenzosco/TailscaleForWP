@@ -19,6 +19,37 @@ if exist tools\check-secrets.py (
   echo [0/5] Segreti
   python tools\check-secrets.py || exit /b 1
 )
+if exist tools\check-no-emoji.py (
+  echo [0/5] Emoji
+  python tools\check-no-emoji.py || exit /b 1
+)
+if exist tools\check-ui-resources.py (
+  echo [0/5] Risorse della UI
+  python tools\check-ui-resources.py || exit /b 1
+)
+
+rem Anteprima e OCR dipendono da Pillow e da Tesseract, che non sono prerequisiti
+rem del progetto: se mancano si dice che il controllo e' saltato (non "passato"),
+rem perche' un salto silenzioso sarebbe una verifica dichiarata e non fatta.
+if exist tools\render-ui-preview.py (
+  echo [0/5] Anteprima della UI
+  python -c "import PIL" >nul 2>nul
+  if errorlevel 1 (
+    echo [0/5] Anteprima della UI: SALTATA, Pillow non installato ^(pip install pillow^)
+  ) else (
+    python tools\render-ui-preview.py || exit /b 1
+  )
+)
+
+if exist tools\ocr-check-ui.py (
+  echo [0/5] OCR della UI
+  python -c "import pytesseract, PIL" >nul 2>nul
+  if errorlevel 1 (
+    echo [0/5] OCR della UI: SALTATO, pytesseract non installato ^(pip install pytesseract^)
+  ) else (
+    python tools\ocr-check-ui.py || exit /b 1
+  )
+)
 
 echo [1/5] Core desktop
 %MSB% src\Tailscale.Core\Tailscale.Core.Desktop.csproj -nologo -verbosity:minimal -p:Configuration=Release

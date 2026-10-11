@@ -14,3 +14,6 @@ provisioning/backup-*.txt
 # scratch dell executor e output di packaging
 .superpowers/
 AppPackages/
+
+# cache di Python dei controlli
+__pycache__/

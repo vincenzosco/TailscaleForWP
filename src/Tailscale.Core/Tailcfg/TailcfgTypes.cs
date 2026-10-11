@@ -236,6 +236,14 @@ namespace Tailscale.Core.Tailcfg
         public string Domain = "";
         public NodeInfo Self;
         public List<NodeInfo> Peers = new List<NodeInfo>();
+
+        /// <summary>
+        /// Vero se la risposta conteneva il campo `Peers`. Distingue "lista intera,
+        /// anche vuota" da "campo assente", che senza questo flag sarebbero lo
+        /// stesso valore: con una lista vuota e autorevole il server dice che non
+        /// ci sono piu' peer, e i peer vecchi vanno tolti.
+        /// </summary>
+        public bool PeersPresent;
         public List<NodeInfo> PeersChanged = new List<NodeInfo>();
         public List<long> PeersRemoved = new List<long>();
         public string Health = "";
@@ -255,6 +263,7 @@ namespace Tailscale.Core.Tailcfg
             JsonValue peers = root["Peers"];
             if (peers != null && peers.IsArray)
             {
+                response.PeersPresent = true;
                 foreach (JsonValue peer in peers.ArrayItems)
                 {
                     NodeInfo info = NodeInfo.FromJson(peer);

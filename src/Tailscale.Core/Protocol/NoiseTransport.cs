@@ -67,7 +67,19 @@ namespace Tailscale.Core.Protocol
             frame[2] = (byte)ciphertext.Length;
             Array.Copy(ciphertext, 0, frame, ProtocolConstants.HeaderLen, ciphertext.Length);
 
+            // Flush a ogni frame: sulla catena del telefono il flush di chi scrive
+            // (Http2Connection) passa da NoiseFrameStream e da PushbackStream, e se
+            // non arriva fino al socket i byte restano nel buffer dello stream di
+            // output di WinRT. Il costo e' una chiamata per frame.
             _stream.Write(frame, 0, frame.Length);
+            _stream.Flush();
+        }
+
+        /// <summary>Spinge fuori i byte scritti, fino allo stream sottostante.</summary>
+        public void Flush()
+        {
+            if (_disposed) return;
+            _stream.Flush();
         }
 
         /// <summary>Spezza il messaggio su piu' frame, come Conn.Write del sorgente.</summary>
