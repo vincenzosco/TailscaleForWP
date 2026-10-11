@@ -14,6 +14,31 @@ namespace Tailscale.Cli
                 Console.WriteLine("  " + line);
             });
 
+            try
+            {
+                return Dispatch(args, log);
+            }
+            catch (Exception ex)
+            {
+                // Rete di sicurezza: un'eccezione non prevista deve lasciare una
+                // traccia diagnostica completa invece di un messaggio del runtime.
+                Console.Error.WriteLine("ECCEZIONE NON GESTITA: " + ex.GetType().FullName);
+                Console.Error.WriteLine(ex.Message);
+                Console.Error.WriteLine(ex.StackTrace);
+                if (ex.InnerException != null)
+                {
+                    Console.Error.WriteLine("CAUSA: " + ex.InnerException.GetType().FullName
+                                            + ": " + ex.InnerException.Message);
+                }
+                return 70;
+            }
+        }
+
+        private static int Dispatch(string[] args, ILogSink log)
+        {
+            log.Log("tailscale-cli " + (args.Length == 0 ? "help" : string.Join(" ", args))
+                    + " | .NET " + Environment.Version + " | " + Environment.OSVersion);
+
             string command = args.Length == 0 ? "help" : args[0].ToLowerInvariant();
 
             switch (command)
