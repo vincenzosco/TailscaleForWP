@@ -12,9 +12,14 @@ La procedura completa, con il perché di ogni voce, è nella skill
 
 - [ ] Gate completo, dal repository pulito: `cmd //c "tools\check-all.cmd"`
       — Ultima esecuzione: 2026-10-11
-- [ ] Prova end-to-end su un telefono vero (deploy Debug, accesso, app in primo
-      piano qualche minuto, passaggio in secondo piano e ritorno, lettura delle
-      ultime righe del Registro) — Ultima esecuzione: non ancora eseguita
+- [ ] Prova end-to-end su un telefono vero: deploy Debug, accesso, app in primo
+      piano qualche minuto, passaggio in secondo piano e ritorno. Poi il registro
+      dal dispositivo, invece di copiarlo a mano dallo schermo:
+      `ISETool.exe ts de 563a8f70-0e06-4690-b075-3963581a75c8 C:\temp\registro`
+      (per l'emulatore `ts xd`, stesso product id; per sapere cosa è collegato
+      `ISETool.exe EnumerateDevices`). Lo strumento non è nel repository: sta
+      nell'SDK, in `IsolatedStorageExplorerTool` dentro `Microsoft SDKs\Windows Phone\v8.1\Tools`
+      — Ultima esecuzione: non ancora eseguita
 
 ## Trimestrale
 
