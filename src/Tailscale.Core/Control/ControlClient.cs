@@ -137,6 +137,14 @@ namespace Tailscale.Core.Control
         /// invece di ritentare per sempre.
         /// </summary>
         public int MaxChannelRetries = 5;
+
+        /// <summary>
+        /// Quanto si aspetta la risposta a una registrazione che non e' una followup.
+        /// Il server risponde subito o il canale e' bloccato: aspettare di piu' non
+        /// aiuta nessuno.
+        /// </summary>
+        public int RegisterTimeoutSeconds = 60;
+
         public int LoginPollMilliseconds = 3000;
         public int LoginTimeoutSeconds = 600;
 
@@ -495,6 +503,14 @@ namespace Tailscale.Core.Control
                                  + ", atteso " + waitedSeconds + "s, nodeKey="
                                  + Short(request.NodeKey) + ", " + body.Length + " byte)");
 
+                // Una followup la tiene aperta il server finche' l'utente non accede:
+                // la sua scadenza e' il tempo che resta alla finestra di login, non un
+                // valore fisso. Per il primo tentativo invece la risposta arriva subito
+                // o il canale e' bloccato: aspettare di piu' non aiuta nessuno.
+                int deadline = sentFollowup
+                    ? RemainingLoginSeconds(waitedSeconds)
+                    : _options.RegisterTimeoutSeconds;
+
                 ControlResponse response;
                 try
                 {
@@ -502,8 +518,31 @@ namespace Tailscale.Core.Control
                     // guasto _connection e' null, e un dial che fallisce e' anch'esso
                     // passeggero.
                     EnsureConnection();
-                    // TEMPORANEO: la scadenza del client arriva nel Task 2; 0 = come oggi.
-                    response = _connection.Post(ProtocolConstants.RegisterPath, body, headers, 0);
+                    response = _connection.Post(ProtocolConstants.RegisterPath, body, headers, deadline);
+                }
+                catch (ControlTimeoutException ex)
+                {
+                    // Deve stare prima di ControlStreamException: una scadenza e' una
+                    // sua sottoclasse, e i due casi non si trattano uguale.
+                    if (_stopping)
+                    {
+                        _options.Log.Log("registrazione interrotta: il motore e' in arresto");
+                        return false;
+                    }
+
+                    // La followup e' scaduta: la scadenza che le abbiamo dato *e'* il
+                    // tempo che resta all'utente per accedere. Scaduta quella, il login
+                    // non e' completato: e' l'uscita che il ramo dell'AuthURL ha gia',
+                    // non un errore del canale.
+                    if (sentFollowup)
+                    {
+                        _options.Log.Log("login non completato entro " + _options.LoginTimeoutSeconds
+                                         + "s; l'URL resta disponibile");
+                        return false;
+                    }
+
+                    if (!RecoverFromChannelFailure("la registrazione", ex)) return false;
+                    continue;
                 }
                 catch (ControlStreamException ex)
                 {
@@ -641,6 +680,17 @@ namespace Tailscale.Core.Control
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Quanto resta della finestra di login. La scadenza di una followup non puo'
+        /// essere piu' corta di cosi': il server tiene aperta la risposta proprio
+        /// mentre l'utente sta accedendo nel browser.
+        /// </summary>
+        private int RemainingLoginSeconds(int waitedSeconds)
+        {
+            int remaining = _options.LoginTimeoutSeconds - waitedSeconds;
+            return remaining > 1 ? remaining : 1;
         }
 
         /// <summary>Apre lo stream della netmap e lo legge finche' non si chiama Stop.</summary>

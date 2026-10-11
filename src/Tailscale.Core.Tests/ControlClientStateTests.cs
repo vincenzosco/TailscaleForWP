@@ -35,6 +35,10 @@ namespace Tailscale.Core.Tests
             Case("arresto durante la registrazione: non e' un errore", StoppingIsNotAnError);
             Case("riavvio dopo l'arresto: si registra di nuovo", RestartAfterStopRegistersAgain);
             Case("tetto dei guasti: solo quelli consecutivi", ChannelFailureBudgetCountsConsecutiveFailures);
+            Case("scadenza: corta al primo tentativo, lunga alla followup", TheDeadlineShrinksWithTheLoginBudget);
+            Case("followup scaduta: e' la fine del login, non un errore", AFollowupThatTimesOutIsALoginTimeout);
+            Case("primo tentativo scaduto: si ritenta", AFirstAttemptThatTimesOutIsRetried);
+            Case("arresto durante una scadenza: non e' un errore", StoppingDuringADeadlineIsNotAnError);
         }
 
         private static void Case(string name, Action test)
@@ -460,6 +464,133 @@ namespace Tailscale.Core.Tests
         }
 
         /// <summary>Uno store con un'identita' gia' autorizzata: il device che l'admin ha cancellato.</summary>
+        // --- scadenze ---
+
+        /// <summary>
+        /// Il primo tentativo non puo' aspettare quanto una followup: il server
+        /// risponde subito o il canale e' bloccato.
+        ///
+        /// Le attese qui contano, quindi la scadenza della followup cala di un
+        /// secondo per volta: il piano scriveva 10 e 9, ma con un poll da 1000 ms la
+        /// prima followup parte quando l'attesa e' gia' di un secondo (la formula del
+        /// piano e' LoginTimeoutSeconds - waitedSeconds, quindi 9 e 8). Il valore
+        /// provato e' la formula, non i due numeri.
+        /// </summary>
+        private static void TheDeadlineShrinksWithTheLoginBudget()
+        {
+            MemoryStateStore store = new MemoryStateStore();
+            TimeoutConnection connection = new TimeoutConnection(
+                "{\"AuthURL\":\"https://login.tailscale.com/a/xyz\",\"MachineAuthorized\":false}");
+
+            List<string> lines;
+            ControlClient client = RunTimeouts(store, connection, 45, 10, out lines);
+
+            T.Eq(45, connection.Deadlines[0], "scadenza: il primo tentativo ha la scadenza corta");
+            T.Eq(9, connection.Deadlines[1], "scadenza: la followup ha il budget di login residuo");
+            T.Eq(8, connection.Deadlines[2], "scadenza: la followup dopo un'attesa ne ha uno in meno");
+            T.Eq(ControlState.NeedLogin.ToString(), client.Status.State.ToString(),
+                 "scadenza: il login resta in corso");
+        }
+
+        /// <summary>
+        /// Una followup che scade *e'* la fine della finestra di login: l'esito di
+        /// oggi per quel caso e' NeedLogin, non Error, e non si ritenta -- il server
+        /// stava solo aspettando l'utente.
+        /// </summary>
+        private static void AFollowupThatTimesOutIsALoginTimeout()
+        {
+            MemoryStateStore store = new MemoryStateStore();
+            TimeoutConnection connection = new TimeoutConnection(
+                "{\"AuthURL\":\"https://login.tailscale.com/a/xyz\",\"MachineAuthorized\":false}");
+            connection.FailOnCall = 2;
+
+            List<string> lines;
+            ControlClient client = RunTimeouts(store, connection, 45, 10, out lines);
+
+            T.Eq(2, connection.Calls, "followup scaduta: non si ritenta, la finestra di login e' finita");
+            T.True(HasLine(lines, "login non completato"), "followup scaduta: il registro dice che e' il login");
+            T.False(HasLine(lines, "canale di controllo non disponibile"),
+                    "followup scaduta: non e' un guasto del canale");
+            T.Eq(ControlState.NeedLogin.ToString(), client.Status.State.ToString(),
+                 "followup scaduta: si resta su NeedLogin, non su Error");
+        }
+
+        /// <summary>Un primo tentativo che scade e' passeggero: il canale si rifa' e si riprova.</summary>
+        private static void AFirstAttemptThatTimesOutIsRetried()
+        {
+            MemoryStateStore store = new MemoryStateStore();
+            TimeoutConnection connection = new TimeoutConnection(AuthorizedResponse());
+            connection.FailOnCall = 1;
+
+            List<string> lines;
+            ControlClient client = RunTimeouts(store, connection, 45, 10, out lines);
+
+            T.Eq(2, connection.Calls, "primo tentativo scaduto: si ritenta");
+            T.True(HasLine(lines, "lo rifaccio"), "primo tentativo scaduto: il registro dice il nuovo tentativo");
+            T.True(client.Status.State != ControlState.Error, "primo tentativo scaduto: nessun errore mostrato");
+        }
+
+        /// <summary>Un arresto arrivato nello stesso istante della scadenza resta un arresto.</summary>
+        private static void StoppingDuringADeadlineIsNotAnError()
+        {
+            MemoryStateStore store = new MemoryStateStore();
+            TimeoutConnection connection = new TimeoutConnection(AuthorizedResponse());
+            connection.FailOnCall = 1;
+            connection.Stopper = true;
+
+            List<string> lines;
+            ControlClient client = RunTimeouts(store, connection, 45, 10, out lines);
+
+            T.Eq(1, connection.Calls, "arresto: non si ritenta dopo che il motore e' stato fermato");
+            T.Eq(ControlState.Stopped.ToString(), client.Status.State.ToString(),
+                 "arresto: lo stato resta Fermo, non diventa Error");
+            T.False(HasLine(lines, "canale di controllo non disponibile"), "arresto: nessun errore");
+        }
+
+        /// <summary>
+        /// Avvia un client con le scadenze del test. Le attese contano e basta: i
+        /// casi del login finiscono da soli quando la finestra si chiude (e allora lo
+        /// stato deve restare NeedLogin), mentre dopo l'autorizzazione il ciclo della
+        /// netmap non finirebbe mai (il finto canale non consegna nulla) e li' si
+        /// ferma il client.
+        /// </summary>
+        private static ControlClient RunTimeouts(IStateStore store, TimeoutConnection connection,
+                                                int registerTimeoutSeconds, int loginTimeoutSeconds,
+                                                out List<string> lines)
+        {
+            List<string> captured = new List<string>();
+            ControlClientOptions options = new ControlClientOptions();
+            options.Hostname = "test";
+            options.Random = new SequenceRandomSource();
+            options.State = store;
+            options.Log = new DelegateLogSink(captured.Add);
+            options.RegisterTimeoutSeconds = registerTimeoutSeconds;
+            options.LoginTimeoutSeconds = loginTimeoutSeconds;
+            options.LoginPollMilliseconds = 1000;
+
+            ControlClient[] holder = new ControlClient[1];
+            options.ConnectionFactory = delegate()
+            {
+                connection.Attach(holder[0]);
+                return connection;
+            };
+            int sleeps = 0;
+            options.Sleep = delegate(int milliseconds)
+            {
+                sleeps++;
+                ControlClient current = holder[0];
+                if (current == null) return;
+                if (current.Status.State == ControlState.Authorized || sleeps > 200) current.Stop();
+            };
+
+            ControlClient client = new ControlClient(options);
+            holder[0] = client;
+            client.Start();
+
+            lines = captured;
+            return client;
+        }
+
         private static MemoryStateStore AuthorizedStore()
         {
             MemoryStateStore store = new MemoryStateStore();
@@ -779,6 +910,54 @@ namespace Tailscale.Core.Tests
                 {
                     Failures++;
                     throw new ControlStreamException(FlakyConnection.Interrupted);
+                }
+
+                ControlResponse response = new ControlResponse();
+                response.StatusCode = 200;
+                response.Body = _body;
+                return response;
+            }
+
+            public void PostStream(string path, string jsonBody,
+                                   List<KeyValuePair<string, string>> headers,
+                                   Action<string> onJson, int watchdogSeconds)
+            {
+            }
+
+            public bool IsBroken { get { return false; } }
+
+            public void Dispose() { }
+        }
+
+        /// <summary>
+        /// Un canale che risponde con un AuthURL (il login e' in corso) e che puo'
+        /// fallire con una scadenza alla chiamata scelta. Registra la scadenza che il
+        /// client gli ha chiesto: e' quella la decisione da provare.
+        /// </summary>
+        private sealed class TimeoutConnection : IControlConnection
+        {
+            private readonly string _body;
+            public readonly List<int> Deadlines = new List<int>();
+            public int Calls;
+            public int FailOnCall;
+            public bool Stopper;
+            private ControlClient _client;
+
+            public TimeoutConnection(string body) { _body = body; }
+
+            public void Attach(ControlClient client) { _client = client; }
+
+            public ControlResponse Post(string path, string jsonBody,
+                                        List<KeyValuePair<string, string>> headers, int deadlineSeconds)
+            {
+                Calls++;
+                Deadlines.Add(deadlineSeconds);
+                if (FailOnCall != 0 && Calls == FailOnCall)
+                {
+                    if (Stopper && _client != null) _client.Stop();
+                    throw new ControlTimeoutException(
+                        "la richiesta non ha ricevuto risposta entro la scadenza",
+                        new IOException("scadenza"));
                 }
 
                 ControlResponse response = new ControlResponse();
