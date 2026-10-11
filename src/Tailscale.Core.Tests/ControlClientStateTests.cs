@@ -22,6 +22,7 @@ namespace Tailscale.Core.Tests
             Case("riavvio: stesse chiavi", RestartKeepsKeys);
             Case("identita' nuova a ogni login", FreshIdentityForEachLoginAttempt);
             Case("login in sospeso: identita' nuova", PendingLoginStartsFresh);
+            Case("stato avvelenato: identita' rigenerata", PoisonedStateRegeneratesEverything);
             Case("login senza browser", NeedLoginSurvivesWithoutBrowser);
             Case("corpo UTF-8", BodyKeepsAccents);
             Case("errore duplicato: recupero", RecoversFromDuplicateIdentityError);
@@ -126,6 +127,29 @@ namespace Tailscale.Core.Tests
                  "login in sospeso: la nuova node key e' persistita");
             T.Eq(null, store.Read("authUrl"), "login in sospeso: l'URL vecchio viene dimenticato");
             T.Eq(null, client.LoginUrl, "login in sospeso: non si ripropone l'URL vecchio");
+        }
+
+        /// <summary>
+        /// Uno stato scritto da una versione con la sorgente casuale rotta ha una
+        /// machine key degenere (64 zeri) ma un nodeKey che si legge senza errori:
+        /// entrambe le chiavi vanno sostituite, non solo quella macchina.
+        /// </summary>
+        private static void PoisonedStateRegeneratesEverything()
+        {
+            MemoryStateStore store = new MemoryStateStore();
+            store.Write("machineKey", new string('0', 64));
+            store.Write("nodeKey", "nodekey:" + new string('e', 64));
+            store.Write("authorized", "1");
+
+            ControlClient client = new ControlClient(Options(store, new FakeConnection()));
+
+            T.True(client.NodeKey.ToString() != "nodekey:" + new string('e', 64),
+                   "stato avvelenato: la node key costante non si riusa");
+            T.Eq(client.NodeKey.ToString(), store.Read("nodeKey"),
+                 "stato avvelenato: la nuova node key e' persistita");
+            T.True(store.Read("machineKey") != new string('0', 64),
+                   "stato avvelenato: la machine key e' nuova");
+            T.Eq(null, store.Read("authorized"), "stato avvelenato: l'autorizzazione vecchia non vale piu'");
         }
 
         private static void NeedLoginSurvivesWithoutBrowser()

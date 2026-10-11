@@ -28,8 +28,23 @@ namespace Tailscale.Core.Keys
             if (privateKey == null) throw new ArgumentNullException("privateKey");
             if (privateKey.Length != 32)
                 throw new ArgumentException("una chiave privata ha 32 byte, ricevuti " + privateKey.Length, "privateKey");
+            if (IsDegenerateKey(privateKey))
+                throw new InvalidOperationException("chiave privata degenere (32 byte tutti uguali): "
+                    + "una sorgente casuale che non riempie il buffer produce sempre la stessa identita'");
 
             return new KeyPair((byte[])privateKey.Clone(), X25519.PublicFromPrivate(privateKey));
+        }
+
+        /// <summary>
+        /// Vero se i byte della chiave sono tutti uguali. Una chiave casuale lo e' con
+        /// probabilita' dell'ordine di 2^-248, quindi il rifiuto non ha falsi positivi;
+        /// un buffer che nessuno ha riempito e' esattamente questo, tutti zeri.
+        /// </summary>
+        internal static bool IsDegenerateKey(byte[] key)
+        {
+            for (int i = 1; i < key.Length; i++)
+                if (key[i] != key[0]) return false;
+            return true;
         }
 
         /// <summary>Genera una coppia nuova dalla sorgente casuale fornita.</summary>
