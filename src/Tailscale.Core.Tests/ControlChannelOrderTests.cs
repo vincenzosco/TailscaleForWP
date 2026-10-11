@@ -33,6 +33,8 @@ namespace Tailscale.Core.Tests
             Case("server che aspetta la prefazione", ServerWaitsForThePreface);
             Case("lettura interrotta: il canale si dichiara rotto", AbortedReadMarksTheChannelBroken);
             Case("onJson che fallisce: non e' un guasto di canale", OnJsonFailureIsNotChannelFailure);
+            Case("richiesta senza risposta: la scadenza la taglia", RequestWithoutAnAnswerIsCutOff);
+            Case("risposta entro la scadenza: passa intera", AnAnswerBeforeTheDeadlineIsWhole);
         }
 
         private const string Sentinel = "sentinella";
@@ -204,7 +206,7 @@ namespace Tailscale.Core.Tests
             string failure = null;
             try
             {
-                channel.Post("/machine/register", "{}", new List<KeyValuePair<string, string>>());
+                channel.Post("/machine/register", "{}", new List<KeyValuePair<string, string>>(), 0);
                 T.True(false, "canale: la lettura interrotta deve essere segnalata");
             }
             catch (ControlStreamException ex)
@@ -309,6 +311,107 @@ namespace Tailscale.Core.Tests
         {
             byte[] bytes = frame.ToBytes();
             wire.WriteFrame(bytes);
+        }
+
+        /// <summary>
+        /// Il caso che questo test difende: il server non risponde e non chiude. Il
+        /// socket resta vivo, la lettura si blocca, e senza una scadenza il client
+        /// aspetta per sempre -- nessuna eccezione, nessuna riga di registro, e
+        /// l'app ferma su "Connessione in corso" finche' non la si ammazza.
+        /// </summary>
+        private static void RequestWithoutAnAnswerIsCutOff()
+        {
+            NoiseSession clientSession, serverSession;
+            Stream clientStream, serverStream;
+            NoiseHandshakeTests.EstablishConnected(
+                out clientSession, out serverSession, out clientStream, out serverStream);
+
+            // Nessun server: il peer non scrive mai un byte.
+            List<string> lines = new List<string>();
+            NoiseControlConnection channel = new NoiseControlConnection(
+                new NoiseTransport(clientStream, clientSession), new DelegateLogSink(lines.Add));
+
+            int started = Environment.TickCount;
+            string failure = null;
+            try
+            {
+                channel.Post("/machine/register", "{}", new List<KeyValuePair<string, string>>(), 1);
+                T.True(false, "scadenza: la richiesta senza risposta deve essere tagliata");
+            }
+            catch (ControlTimeoutException ex)
+            {
+                failure = ex.Message;
+            }
+            catch (Exception ex)
+            {
+                failure = "tipo inatteso " + ex.GetType().Name + ": " + ex.Message;
+            }
+
+            int elapsed = Environment.TickCount - started;
+            T.True(failure != null && failure.IndexOf("tipo inatteso", StringComparison.Ordinal) < 0,
+                   "scadenza: l'errore e' un ControlTimeoutException (" + failure + ")");
+            T.True(elapsed < 10000, "scadenza: la richiesta finisce, non resta appesa (" + elapsed + " ms)");
+            T.True(channel.IsBroken, "scadenza: dopo la scadenza il canale e' rotto (va rifatto)");
+            T.True(HasLine(lines, "nessun dato per 1s"),
+                   "scadenza: il registro dice che il canale e' stato chiuso per inattivita'");
+        }
+
+        /// <summary>
+        /// Una risposta che arriva prima della scadenza non deve essere toccata: il
+        /// server puo' essere lento, e una scadenza troppo aggressiva taglierebbe un
+        /// canale che stava funzionando.
+        /// </summary>
+        private static void AnAnswerBeforeTheDeadlineIsWhole()
+        {
+            NoiseSession clientSession, serverSession;
+            Stream clientStream, serverStream;
+            NoiseHandshakeTests.EstablishConnected(
+                out clientSession, out serverSession, out clientStream, out serverStream);
+
+            NoiseControlConnection channel = new NoiseControlConnection(
+                new NoiseTransport(clientStream, clientSession), NullLogSink.Instance);
+
+            string serverFailure = null;
+            Thread server = new Thread(delegate()
+            {
+                try
+                {
+                    NoiseTransport wire = new NoiseTransport(serverStream, serverSession);
+                    WriteFrame(wire, new Http2Frame(Http2FrameType.Settings, 0, 0, new byte[0]));
+
+                    List<HpackHeader> headers = new List<HpackHeader>();
+                    headers.Add(new HpackHeader(":status", "200"));
+                    headers.Add(new HpackHeader("content-type", "application/json"));
+                    WriteFrame(wire, new Http2Frame(Http2FrameType.Headers, Http2Frame.FlagEndHeaders, 1,
+                        new HpackEncoder(true).Encode(headers)));
+                    WriteFrame(wire, new Http2Frame(Http2FrameType.Data, Http2Frame.FlagEndStream, 1,
+                        new byte[] { 0x7b, 0x7d }));
+                }
+                catch (Exception ex)
+                {
+                    serverFailure = ex.GetType().Name + ": " + ex.Message;
+                }
+            });
+            server.IsBackground = true;
+            server.Start();
+
+            ControlResponse response = channel.Post("/machine/register", "{}",
+                new List<KeyValuePair<string, string>>(), 5);
+            server.Join(2000);
+
+            T.True(serverFailure == null, "scadenza: il server finto non ha fallito (" + serverFailure + ")");
+            T.Eq(200, response.StatusCode, "scadenza: la risposta arriva intera");
+            T.Eq("{}", response.Body, "scadenza: il corpo e' quello del server");
+            T.False(channel.IsBroken, "scadenza: il canale resta buono");
+        }
+
+        private static bool HasLine(List<string> lines, string fragment)
+        {
+            for (int i = 0; i < lines.Count; i++)
+            {
+                if (lines[i].IndexOf(fragment, StringComparison.Ordinal) >= 0) return true;
+            }
+            return false;
         }
 
         /// <summary>Legge esattamente count byte, o lancia: qui un troncamento e' un guasto.</summary>

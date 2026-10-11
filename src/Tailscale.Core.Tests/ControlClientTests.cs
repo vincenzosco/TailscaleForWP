@@ -102,7 +102,8 @@ namespace Tailscale.Core.Tests
         {
             public string RegisterBody = "{}";
 
-            public ControlResponse Post(string path, string jsonBody, List<KeyValuePair<string, string>> headers)
+            public ControlResponse Post(string path, string jsonBody,
+                                        List<KeyValuePair<string, string>> headers, int deadlineSeconds)
             {
                 ControlResponse response = new ControlResponse();
                 response.StatusCode = 200;
