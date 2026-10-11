@@ -20,6 +20,29 @@ namespace Tailscale.Core.Tests
             RoundTrip();
             Rejections();
             Generation();
+            DegenerateKeys();
+        }
+
+        /// <summary>
+        /// Una sorgente casuale che non riempie il buffer lascia la chiave privata
+        /// al valore di partenza, cioe' 32 byte a zero. Il motore deve rifiutarla:
+        /// altrimenti ogni avvio produce la stessa identita' e la stessa node key,
+        /// che il control server rifiuta per sempre come "gia' esistente".
+        /// </summary>
+        private static void DegenerateKeys()
+        {
+            T.Throws(delegate { KeyPair.Generate(new NeverFillingRandomSource()); },
+                     "sorgente che non riempie: nessuna chiave degenere");
+            T.Throws(delegate { KeyMaterial.LoadPrivate(new string('0', 64)); },
+                     "stato salvato tutto a zero: rifiutato");
+
+            byte[] repeated = new byte[32];
+            for (int i = 0; i < repeated.Length; i++) repeated[i] = 0xAB;
+            T.Throws(delegate { KeyPair.FromPrivateKey(repeated); }, "byte tutti uguali: rifiutata");
+
+            // Controllo positivo: una chiave con byte diversi resta valida.
+            byte[] sample = T.FromHex(SampleHex);
+            T.Eq(sample, KeyPair.FromPrivateKey(sample).PrivateKey, "chiave normale: accettata");
         }
 
         private static void RoundTrip()
@@ -86,6 +109,12 @@ namespace Tailscale.Core.Tests
         private static void Reject(Action action, string name)
         {
             T.Throws(action, name);
+        }
+
+        /// <summary>Lascia il buffer come l'ha trovato: era la sorgente del telefono.</summary>
+        private sealed class NeverFillingRandomSource : IRandomSource
+        {
+            public void NextBytes(byte[] buffer) { }
         }
 
         /// <summary>Sorgente deterministica per i test: byte 0,1,2,...</summary>
