@@ -19,17 +19,21 @@ repository contains the proof, not just the code.
 | Noise IK handshake (controlbase) | **Done** | **Against the real server**: `Tailscale.Cli handshake` |
 | Server keys, ts2021 dialer, HTTP upgrade | **Done** | `Tailscale.Cli handshake` against `controlplane.tailscale.com` |
 | Noise transport framing | **Done** | In-memory tests, including authentication of every byte |
-| Node registration, netmap, login URL | **Done in code, outlined by tests** | In-memory tests for the state machine (deadlines, retries, netmap) and `Tailscale.Cli login` for the real server; `src/Tailscale.Core.Tests/EngineRunStateTests.cs` for the engine that stops after the budget and starts again; the acceptance on a phone is still manual |
+| Node registration, netmap, login URL | **Done in code, outlined by tests** | In-memory tests for the state machine (deadlines, retries, netmap) and `Tailscale.Cli login` for the real server; `src/Tailscale.Core.Tests/EngineRunStateTests.cs` for the engine that stops after the budget and starts again; **run on a real device on 2026-10-11** (registration authorized, netmap live, the abort recognised); the browser step of a first login is still manual |
 | App UI (login, peer list, log panel) | **Done in code, outlined by tests** | `Tailscale/MainPage.xaml` and its code-behind, with every visible string checked by `tools/check-ui-resources.py`; the acceptance on a phone is still manual |
-| Phone log that survives the app | **Done** | The engine writes `LocalFolder\registro.log` (a bounded tail of 400 lines): the policy has tests in the core, the WinRT file is verified by the ARM build |
+| Phone log that survives the app | **Done** | The engine writes `LocalFolder\registro.log` (a bounded tail of 400 lines): the policy has tests in the core, and the file was pulled off a real phone with `ISETool.exe` on 2026-10-11 |
 | Logos and splash screens | **Done** | The package contains the images byte for byte |
 | Localization (en-US, it-IT) | **Done** | `ResourceLoader` in `Tailscale/MainPage.xaml.cs`; `tools/check-ui-resources.py` checks that every string exists in both languages |
 
-Honest detail: the handshake works against the real server, and registration,
-the netmap and the request deadlines are implemented and covered by the
-in-memory tests — but **none of it has been verified on a phone yet**. That
-last step needs a person and a real device, and it is the one proof this
-repository cannot produce by itself.
+Honest detail: on 2026-10-11 the app was **run on a real Windows Phone 8.1
+device**, and the log it now writes to its own folder was pulled off the phone
+with `ISETool.exe`. That log shows the ts2021 handshake against the real control
+server, `http: /machine/register -> 200` with the node authorized, the netmap
+stream arriving (`stato: Connecting -> Authorized`) and the `0x800703E3` abort
+recognised and recorded after a deliberate stop — and the engine came back with
+**the same node key**, so the tailnet still sees one device. What that run does
+not demonstrate is the browser step of a **first** login: that device was already
+authorized.
 
 ## The proof that matters
 
@@ -143,9 +147,10 @@ Choices worth knowing when reading the code:
 
 ## Known limitations
 
-1. **Registration requires a person.** The acceptance step involves opening the
-   login URL and signing in with a Tailscale account: it cannot be automated.
-   Until then Task 10 stays unverified.
+1. **The first login requires a person.** Opening the login URL, signing in and
+   coming back cannot be automated, and it is the one part of the control plane
+   the device run of 2026-10-11 does not demonstrate: that device was already
+   authorized.
 2. **No data plane.** No WireGuard, no SOCKS proxy: the app handles the control
    plane. The data plane is Plan 2, not started.
 3. The plan documents and the ledger live in `docs/`, which is **git-ignored** in
@@ -231,17 +236,21 @@ questo repository contiene la prova, non solo il codice.
 | Handshake Noise IK (controlbase) | **Fatto** | **Contro il server reale**: `Tailscale.Cli handshake` |
 | Chiavi del server, dialer ts2021, upgrade HTTP | **Fatto** | `Tailscale.Cli handshake` contro `controlplane.tailscale.com` |
 | Framing del trasporto Noise | **Fatto** | Test in memoria, inclusa l'autenticazione di ogni byte |
-| Registrazione del nodo, netmap, URL di login | **Fatto nel codice, delineato dai test** | Test in memoria per la macchina a stati (scadenze, ritentate, netmap) e `Tailscale.Cli login` per il server vero; `src/Tailscale.Core.Tests/EngineRunStateTests.cs` per il motore che si ferma dopo il tetto e riparte; l'accettazione sul telefono e' ancora manuale |
+| Registrazione del nodo, netmap, URL di login | **Fatto nel codice, delineato dai test** | Test in memoria per la macchina a stati (scadenze, ritentate, netmap) e `Tailscale.Cli login` per il server vero; `src/Tailscale.Core.Tests/EngineRunStateTests.cs` per il motore che si ferma dopo il tetto e riparte; **eseguita su un dispositivo vero il 2026-10-11** (registrazione autorizzata, netmap viva, abort riconosciuto); il passo nel browser di un primo login resta manuale |
 | UI dell'app (login, lista peer, pannello Registro) | **Fatta nel codice, delineata dai test** | `Tailscale/MainPage.xaml` e il suo code-behind, con ogni stringa visibile controllata da `tools/check-ui-resources.py`; l'accettazione sul telefono e' ancora manuale |
-| Registro del telefono che sopravvive all'app | **Fatto** | Il motore scrive `LocalFolder\registro.log` (una coda di 400 righe): la politica ha i test nel core, il file WinRT e' verificato dalla build ARM |
+| Registro del telefono che sopravvive all'app | **Fatto** | Il motore scrive `LocalFolder\registro.log` (una coda di 400 righe): la politica ha i test nel core, e il file e' stato tirato giu' da un telefono vero con `ISETool.exe` il 2026-10-11 |
 | Loghi e splash screen | **Fatto** | Il pacchetto contiene le immagini byte per byte |
 | Localizzazione (en-US, it-IT) | **Fatto** | `ResourceLoader` in `Tailscale/MainPage.xaml.cs`; `tools/check-ui-resources.py` verifica che ogni stringa esista in entrambe le lingue |
 
-Dettaglio onesto: l'handshake funziona contro il server vero, e registrazione,
-netmap e scadenze delle richieste sono implementate e coperte dai test in
-memoria — ma **niente di tutto questo e' stato verificato su un telefono**. Quel
-passo richiede una persona e un dispositivo vero, ed e' l'unica prova che questo
-repository non puo' produrre da se'.
+Dettaglio onesto: il 2026-10-11 l'app è stata **eseguita su un dispositivo
+Windows Phone 8.1 vero**, e il registro che ora scrive nella propria cartella è
+stato tirato giù dal telefono con `ISETool.exe`. Quel registro mostra l'handshake
+ts2021 contro il control server vero, `http: /machine/register -> 200` con il nodo
+autorizzato, la netmap che arriva (`stato: Connecting -> Authorized`) e l'abort
+`0x800703E3` riconosciuto e registrato dopo una chiusura voluta — e il motore è
+ripartito **con la stessa node key**, quindi il tailnet vede ancora un dispositivo
+solo. Quello che quella esecuzione non dimostra è il passo nel browser di un
+**primo** login: quel dispositivo era già autorizzato.
 
 ## La prova che conta
 
@@ -353,9 +362,10 @@ Scelte che vale la pena conoscere leggendo il codice:
 
 ## Limiti noti
 
-1. **La registrazione richiede una persona.** Il passo di accettazione prevede di
-   aprire l'URL di login e accedere con un account Tailscale: non è automatizzabile.
-   Fino ad allora il Task 10 resta non verificato.
+1. **Il primo login richiede una persona.** Aprire l'URL di login, accedere e
+tornare nell'app non è automatizzabile, ed è l'unica parte del control plane che
+l'esecuzione su dispositivo del 2026-10-11 non dimostra: quel dispositivo era già
+autorizzato.
 2. **Nessun data plane.** Niente WireGuard, niente proxy SOCKS: l'app gestisce il
    piano di controllo. Il piano dati è il Piano 2, non iniziato.
 3. I documenti di piano e il ledger vivono in `docs/`, che è **git-ignorato** in
