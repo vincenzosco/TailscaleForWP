@@ -193,6 +193,45 @@ namespace Tailscale.Core.Tests
                      "controlbase: il seguito dell'handshake e' monouso");
         }
 
+        /// <summary>
+        /// Handshake completato su due stream in memoria ancora aperti: serve agli
+        /// altri test (trasporto) per partire da una sessione vera.
+        /// </summary>
+        public static void EstablishConnected(
+            out NoiseSession clientSession, out NoiseSession serverSession,
+            out Stream clientStream, out Stream serverStream)
+        {
+            Stream client, server;
+            InMemoryDuplex.Create(out client, out server);
+            EstablishOn(client, server, out clientSession, out serverSession);
+            clientStream = client;
+            serverStream = server;
+        }
+
+        /// <summary>
+        /// Handshake su stream gia' esistenti (eventualmente avvolti da un
+        /// TamperingStream), cosi' un test puo' manomettere i byte del trasporto che
+        /// arrivano dopo l'handshake.
+        /// </summary>
+        public static void EstablishOn(
+            Stream clientStream, Stream serverStream,
+            out NoiseSession clientSession, out NoiseSession serverSession)
+        {
+            KeyPair machineKey = new KeyPairGenerator(21).Generate();
+            KeyPair controlKey = new KeyPairGenerator(22).Generate();
+
+            NoiseSession clientResult, serverResult;
+            Exception clientError, serverError;
+            Exchange(clientStream, serverStream, machineKey, controlKey,
+                     out clientResult, out clientError, out serverResult, out serverError);
+
+            if (clientError != null) throw clientError;
+            if (serverError != null) throw serverError;
+
+            clientSession = clientResult;
+            serverSession = serverResult;
+        }
+
         /// <summary>Esegue un handshake completo in memoria su due thread.</summary>
         private static void Exchange(
             KeyPair machineKey, KeyPair controlKey,
