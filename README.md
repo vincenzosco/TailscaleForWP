@@ -29,9 +29,7 @@ Honest detail: the handshake works against the real server, and registration,
 the netmap and the request deadlines are implemented and covered by the
 in-memory tests — but **none of it has been verified on a phone yet**. That
 last step needs a person and a real device, and it is the one proof this
-repository cannot produce by itself. What is missing is written down with the
-evidence instead of hidden: see
-`docs/superpowers/plans/2026-10-11-wp81-tailscale-14-request-deadlines.md`.
+repository cannot produce by itself.
 
 ## The proof that matters
 
@@ -243,9 +241,7 @@ Dettaglio onesto: l'handshake funziona contro il server vero, e registrazione,
 netmap e scadenze delle richieste sono implementate e coperte dai test in
 memoria — ma **niente di tutto questo e' stato verificato su un telefono**. Quel
 passo richiede una persona e un dispositivo vero, ed e' l'unica prova che questo
-repository non puo' produrre da se'. Quello che manca e' scritto con l'evidenza,
-non nascosto: vedi
-`docs/superpowers/plans/2026-10-11-wp81-tailscale-14-request-deadlines.md`.
+repository non puo' produrre da se'.
 
 ## La prova che conta
 
