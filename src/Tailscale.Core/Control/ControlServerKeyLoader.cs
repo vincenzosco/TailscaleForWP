@@ -54,6 +54,8 @@ namespace Tailscale.Core.Control
                 CultureInfo.InvariantCulture, ProtocolConstants.ServerKeyPathFormat,
                 baseUrl.TrimEnd('/'), version);
 
+            log.Log("chiavi del server: GET " + url + " (timeout " + timeoutMs + " ms)");
+
             string body;
             try
             {
@@ -61,14 +63,49 @@ namespace Tailscale.Core.Control
             }
             catch (HttpFetchException ex)
             {
-                // Il messaggio del fetcher contiene gia' il contesto di rete: non lo
-                // si ripete qui, si aggiunge solo l'URL che ha fallito.
+                string detail = ex.IsTransportFailure
+                    ? "errore di trasporto"
+                    : "http " + ex.StatusCode;
+                log.Log("chiavi del server: GET fallita (" + detail + "): " + ex.Message);
+                // Il messaggio del fetcher contiene gia' il contesto di rete: qui si
+                // aggiunge solo l'URL che ha fallito.
                 throw new ControlServerKeyException("GET " + url + " fallita: " + ex.Message, ex);
             }
 
-            ControlServerKeys keys = Parse(body);
+            log.Log("chiavi del server: " + (body == null ? 0 : body.Length) + " byte di risposta");
+
+            ControlServerKeys keys;
+            try
+            {
+                keys = Parse(body);
+            }
+            catch (ControlServerKeyException ex)
+            {
+                // Un corpo inatteso si vede tutto nei log: senza, un server che
+                // cambia formato sembra un errore di rete.
+                log.Log("chiavi del server: risposta non interpretabile: " + ex.Message);
+                log.Log("chiavi del server: corpo ricevuto = " + Preview(body));
+                throw;
+            }
+
             log.Log("chiavi del server da " + url + ": " + keys);
             return keys;
+        }
+
+        /// <summary>Un'anteprima breve e ripulita del corpo, per i log.</summary>
+        private static string Preview(string body)
+        {
+            if (string.IsNullOrEmpty(body)) return "<vuoto>";
+
+            char[] buffer = new char[Math.Min(200, body.Length)];
+            for (int i = 0; i < buffer.Length; i++)
+            {
+                char c = body[i];
+                buffer[i] = c >= ' ' && c <= '~' ? c : '.';
+            }
+            string text = new string(buffer);
+            if (text.Length > 160) text = text.Substring(0, 160) + "...";
+            return "\"" + text + "\" (" + body.Length + " byte totali)";
         }
 
         /// <summary>Interpreta il corpo JSON della risposta.</summary>

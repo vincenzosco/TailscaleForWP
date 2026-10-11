@@ -52,15 +52,23 @@ namespace Tailscale.Core.Protocol
 
                 try
                 {
+                    log.Log("ts2021: provo " + scheme + "://" + hostname + ":" + port
+                            + " (timeout " + ConnectTimeoutMs + " ms, handshake di "
+                            + start.InitialMessage.Length + " byte in " + ProtocolConstants.HandshakeHeaderName + ")");
+
                     stream = connector.Connect(hostname, port, useTls, ConnectTimeoutMs);
+                    log.Log("ts2021: connesso a " + scheme + "://" + hostname + ":" + port);
+
                     RawHttp.WriteHead(stream, BuildRequestHead(hostname, handshake));
 
                     HttpResponseHead response = RawHttp.ReadResponseHead(stream);
+                    log.Log("ts2021: risposta \"" + response.StatusLine + "\", "
+                            + response.HeaderCount + " header");
 
                     if (response.StatusCode == 101)
                     {
                         log.Log("ts2021: upgrade accettato su " + scheme + "://" + hostname + ":" + port);
-                        NoiseSession session = StartWithTimeout(start, stream);
+                        NoiseSession session = StartWithTimeout(start, stream, log);
 
                         log.Log("ts2021: handshake completato, peer=" + session.PeerKey
                                 + ", versione=" + session.ProtocolVersion);
@@ -72,11 +80,15 @@ namespace Tailscale.Core.Protocol
                         ? " (risposta HTML: probabile proxy captive o portale Wi-Fi)"
                         : "";
                     failures.Add(scheme + "://" + hostname + ":" + port + " -> " + response.StatusLine + hint);
+                    log.Log("ts2021: " + scheme + "://" + hostname + ":" + port + " rifiutato: "
+                            + response.StatusLine + hint);
                     stream.Dispose();
                 }
                 catch (Exception ex)
                 {
                     failures.Add(scheme + "://" + hostname + ":" + port + " -> " + ex.Message);
+                    log.Log("ts2021: " + scheme + "://" + hostname + ":" + port + " fallito: "
+                            + ex.GetType().Name + ": " + ex.Message);
                     if (stream != null)
                     {
                         try { stream.Dispose(); }
@@ -85,6 +97,7 @@ namespace Tailscale.Core.Protocol
                 }
             }
 
+            log.Log("ts2021: nessun tentativo riuscito per " + hostname);
             throw new ControlDialException(
                 "impossibile aprire la connessione di controllo con " + hostname + ": "
                 + string.Join("; ", failures.ToArray()));
@@ -94,18 +107,23 @@ namespace Tailscale.Core.Protocol
         /// L'handshake differito va completato una sola volta: se fallisce qui non si
         /// puo' ritentare con lo stesso oggetto, quindi l'errore e' definitivo.
         /// </summary>
-        private static NoiseSession StartWithTimeout(NoiseHandshakeStart start, Stream stream)
+        private static NoiseSession StartWithTimeout(NoiseHandshakeStart start, Stream stream, ILogSink log)
         {
             try
             {
-                return start.Continuation.Complete(stream);
+                NoiseSession session = start.Continuation.Complete(stream);
+                return session;
             }
-            catch (NoiseHandshakeException)
+            catch (NoiseHandshakeException ex)
             {
+                // Rifiuto autenticato dal server: il messaggio e' utile all'utente.
+                log.Log("ts2021: il server ha rifiutato l'handshake: " + ex.Message);
                 throw;
             }
             catch (Exception ex)
             {
+                log.Log("ts2021: upgrade riuscito ma handshake Noise fallito ("
+                        + ex.GetType().Name + "): " + ex.Message);
                 throw new ControlDialException(
                     "upgrade riuscito ma handshake Noise fallito: " + ex.Message, ex);
             }
