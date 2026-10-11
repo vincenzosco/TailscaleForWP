@@ -20,6 +20,10 @@ namespace Tailscale.Cli
             {
                 case "handshake":
                     return CommandHandshake.Run(log);
+                case "login":
+                    return CommandLogin.Run(log);
+                case "probe":
+                    return CommandProbe.Run(log);
                 case "selftest":
                     return CommandSelfTest.Run();
                 case "help":
@@ -37,6 +41,7 @@ namespace Tailscale.Cli
             Console.WriteLine("tailscale-cli <comando>");
             Console.WriteLine();
             Console.WriteLine("  handshake   contatta il control server, complete l'handshake Noise ts2021");
+            Console.WriteLine("  login       registra il nodo e attende l'autorizzazione (stampa l'URL di login)");
             Console.WriteLine("  selftest    controlli offline (nessuna rete): parser delle chiavi e richiesta");
             Console.WriteLine("  help        questo messaggio");
             Console.WriteLine();
