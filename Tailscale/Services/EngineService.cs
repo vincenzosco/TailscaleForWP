@@ -128,13 +128,26 @@ namespace Tailscale.Services
         {
             Task.Factory.StartNew(delegate()
             {
-                if (!_run.Run(RunEngine))
+                try
                 {
-                    _log.Log("il motore e' gia' in moto: nessuna seconda partenza");
-                    return;
+                    if (!_run.Run(RunEngine))
+                    {
+                        _log.Log("il motore e' gia' in moto: nessuna seconda partenza");
+                        return;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Un errore prima ancora di costruire il client (lettura del nome
+                    // del dispositivo, costruzione dello stato) uscirebbe dalla task in
+                    // silenzio: il motore si libera, ma l'utente vedrebbe la schermata
+                    // di prima e nessuno saprebbe perche'. Una riga, e la pagina si
+                    // ridisegna.
+                    _log.Log("il ciclo del motore si e' fermato con un errore ("
+                             + ex.GetType().Name + "): " + ex.Message);
                 }
 
-                // Il ciclo e' uscito: arresto voluto, oppure budget esaurito. La
+                // Il ciclo e' uscito: arresto voluto, budget esaurito, o un errore. La
                 // pagina deve tornare a mostrare il pulsante che rimette in moto il
                 // motore -- e quel pulsante ora funziona davvero.
                 RaiseChanged();
