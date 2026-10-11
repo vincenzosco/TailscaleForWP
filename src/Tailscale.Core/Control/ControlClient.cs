@@ -234,7 +234,10 @@ namespace Tailscale.Core.Control
             }
             catch (Exception ex)
             {
-                _options.Log.Log("errore del client di controllo: " + ex.Message);
+                // Tipo di eccezione compreso: distinguere un timeout di rete da un
+                // JSON inatteso e' la differenza fra aspettare e correggere il codice.
+                _options.Log.Log("errore del client di controllo (" + ex.GetType().Name
+                                 + "): " + ex.Message);
                 SetState(ControlState.Error, null, ex.Message);
             }
         }
@@ -266,8 +269,16 @@ namespace Tailscale.Core.Control
                 List<KeyValuePair<string, string>> headers = new List<KeyValuePair<string, string>>();
                 headers.Add(new KeyValuePair<string, string>(ProtocolConstants.LbHeaderName, request.NodeKey));
 
+                string body = request.ToJson();
+                _options.Log.Log("registrazione: tentativo (" + (sentFollowup ? "followup" : "primo")
+                                 + ", atteso " + waitedSeconds + "s, nodeKey="
+                                 + Short(request.NodeKey) + ", " + body.Length + " byte)");
+
                 ControlResponse response = _connection.Post(
-                    ProtocolConstants.RegisterPath, request.ToJson(), headers);
+                    ProtocolConstants.RegisterPath, body, headers);
+
+                _options.Log.Log("registrazione: risposta http " + response.StatusCode
+                                 + ", " + (response.Body == null ? 0 : response.Body.Length) + " byte");
 
                 if (!response.IsSuccess)
                 {
@@ -447,6 +458,13 @@ namespace Tailscale.Core.Control
         {
             lock (_gate)
             {
+                // Una riga per ogni transizione: se lo stato non cambia mai come
+                // l'utente si aspetta, qui si vede dove si e' fermato.
+                if (_status.State != state)
+                    _options.Log.Log("stato: " + _status.State + " -> " + state
+                                     + (error != null ? " (" + error + ")" : "")
+                                     + (loginUrl != null ? " (URL di login disponibile)" : ""));
+
                 _status.State = state;
                 _status.ErrorMessage = error;
                 if (state == ControlState.Authorized) _status.LoginUrl = null;
@@ -502,12 +520,18 @@ namespace Tailscale.Core.Control
 
         private void EnsureConnection()
         {
-            if (_connection != null && !_connection.IsBroken) return;
+            if (_connection != null && !_connection.IsBroken)
+            {
+                _options.Log.Log("canale di controllo: riuso la connessione esistente");
+                return;
+            }
 
+            if (_connection != null) _options.Log.Log("canale di controllo: la connessione e' segnata rotta, la rifaccio");
             DisposeConnection();
 
             if (_options.ConnectionFactory != null)
             {
+                _options.Log.Log("canale di controllo: connessione finta (test)");
                 _connection = _options.ConnectionFactory();
                 return;
             }
@@ -518,11 +542,17 @@ namespace Tailscale.Core.Control
                     _options.Fetcher, _options.ServerUrl, _options.Version, _options.Log);
             }
 
+            _options.Log.Log("canale di controllo: chiavi del server pronte (" + _serverKeys + ")");
+            _options.Log.Log("canale di controllo: apro " + _options.ControlHost
+                             + ", nodeKey=" + Short(_options.NodeKey.ToString())
+                             + ", versione=" + _options.Version);
+
             NoiseTransport transport = ControlHttpDialer.Dial(
                 _options.ControlHost, _options.MachineKeyPair, _serverKeys, _options.Version,
                 _options.Random, _options.Connector, _options.Log);
 
             _connection = new NoiseControlConnection(transport, _options.Log);
+            _options.Log.Log("canale di controllo: pronto");
         }
 
         private void DisposeConnection()
@@ -555,6 +585,13 @@ namespace Tailscale.Core.Control
         {
             KeyPair pair = KeyPair.Generate(_options.Random);
             return DiscoKey.FromBytes(pair.PublicKey);
+        }
+
+        /// <summary>I primi caratteri di una stringa pubblica (una chiave), per i log.</summary>
+        private static string Short(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return "<nessuna>";
+            return text.Length <= 18 ? text : text.Substring(0, 18) + "...";
         }
 
         private static string Trim(string text)

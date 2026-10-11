@@ -39,15 +39,20 @@ namespace Tailscale.Core.Control
 
         public ControlResponse Post(string path, string jsonBody, List<KeyValuePair<string, string>> headers)
         {
+            _log.Log("http: POST " + path + " (" + (jsonBody == null ? 0 : jsonBody.Length)
+                     + " byte, " + (headers == null ? 0 : headers.Count) + " header)");
             HttpOverNoise.WriteRequest(_stream, "POST", path, "controlplane.tailscale.com", jsonBody, headers);
 
             HttpBodyResponse response;
             try
             {
                 response = HttpOverNoise.ReadResponse(_stream);
+                _log.Log("http: " + path + " -> " + response.StatusCode + " " + response.ReasonPhrase
+                         + ", " + (response.Body == null ? 0 : response.Body.Length) + " byte");
             }
             catch (IOException ex)
             {
+                _log.Log("http: " + path + " chiusa senza risposta (" + ex.Message + ")");
                 // Il control server parla HTTP/2 dentro Noise (il client Go forza
                 // `SetUnencryptedHTTP2`), quindi una richiesta HTTP/1.1 viene chiusa
                 // senza risposta. L'errore grezzo sarebbe "stream chiuso dopo 0 di 3
@@ -76,12 +81,21 @@ namespace Tailscale.Core.Control
             string path, string jsonBody, List<KeyValuePair<string, string>> headers,
             Action<string> onJson, int watchdogSeconds)
         {
+            _log.Log("map: apro lo stream su " + path + " (watchdog " + watchdogSeconds
+                     + "s, " + (jsonBody == null ? 0 : jsonBody.Length) + " byte)");
             HttpOverNoise.WriteRequest(_stream, "POST", path, "controlplane.tailscale.com", jsonBody, headers);
 
             HttpResponseHead head = RawHttp.ReadResponseHead(_stream);
+            _log.Log("map: risposta \"" + head.StatusLine + "\", "
+                     + head.HeaderCount + " header, transfer-encoding="
+                     + (head.Get("Transfer-Encoding") ?? "assente")
+                     + ", content-length="
+                     + (head.Get("Content-Length") ?? "assente"));
+
             if (head.StatusCode != 200)
             {
                 string body = HttpOverNoise.ReadResponse(_stream).Body;
+                _log.Log("map: rifiutata, corpo = " + Trim(body));
                 throw new ControlStreamException(
                     "map rifiutata: http " + head.StatusCode + " " + Trim(body));
             }
@@ -156,9 +170,10 @@ namespace Tailscale.Core.Control
 
         public void Dispose()
         {
+            _log.Log("canale di controllo: chiusura");
             _broken = true;
             try { _transport.Dispose(); }
-            catch (Exception) { }
+            catch (Exception ex) { _log.Log("canale di controllo: errore in chiusura: " + ex.Message); }
         }
     }
 
