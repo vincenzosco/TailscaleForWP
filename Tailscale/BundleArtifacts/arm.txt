@@ -1,0 +1,2 @@
+MainPackage=C:\Users\Vincenzo\Documents\Tailscale\Tailscale\bin\ARM\Release\Tailscale_1.0.0.0_Bundle\Tailscale_1.0.0.0_ARM.appx
+SymbolPackage=C:\Users\Vincenzo\Documents\Tailscale\Tailscale\AppPackages\Tailscale_1.0.0.0_Test\Tailscale_1.0.0.0_ARM.appxsym
