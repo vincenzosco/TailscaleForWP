@@ -112,6 +112,9 @@ namespace Tailscale.Core.Tests
             DecodesResponseBlock();
             DecodesPlainBlock();
             DecodesLongHuffmanValue();
+            EncoderMatchesHpackByteForByte();
+            EncoderRoundTrip();
+            EncoderWithoutHuffman();
             RejectsOutOfTableIndex();
             RejectsIndexZero();
             RejectsBadHuffmanPadding();
@@ -203,6 +206,98 @@ namespace Tailscale.Core.Tests
             // un header valido.
             HpackDecoder decoder = new HpackDecoder(NullLogSink.Instance);
             T.Throws(delegate { decoder.Decode(T.FromHex("be")); }, "indice 62 con tabella dinamica vuota");
+        }
+
+        private static void EncoderMatchesHpackByteForByte()
+        {
+            // La stessa lista di header che ha prodotto RequestBlockHex con
+            // hpack: se i byte coincidono, la nostra codifica e' quella di
+            // un'implementazione indipendente (indici statici, nome per indice,
+            // Huffman) e non solo una che il nostro decoder sa rileggere.
+            HpackEncoder encoder = new HpackEncoder(true);
+            List<HpackHeader> headers = new List<HpackHeader>();
+            headers.Add(new HpackHeader(":method", "POST"));
+            headers.Add(new HpackHeader(":scheme", "https"));
+            headers.Add(new HpackHeader(":authority", "controlplane.tailscale.com"));
+            headers.Add(new HpackHeader(":path", "/machine/register"));
+            headers.Add(new HpackHeader("content-type", "application/json"));
+            headers.Add(new HpackHeader("user-agent", "tailscale"));
+
+            byte[] block = encoder.Encode(headers);
+            T.Eq(RequestBlockHex, T.ToHex(block), "encoder: byte identici a hpack");
+        }
+
+        private static void EncoderRoundTrip()
+        {
+            HpackEncoder encoder = new HpackEncoder(true);
+            List<HpackHeader> headers = new List<HpackHeader>();
+            headers.Add(new HpackHeader(":method", "POST"));
+            headers.Add(new HpackHeader(":scheme", "https"));
+            headers.Add(new HpackHeader(":authority", "controlplane.tailscale.com"));
+            headers.Add(new HpackHeader(":path", "/machine/map"));
+            headers.Add(new HpackHeader("content-type", "application/json"));
+            headers.Add(new HpackHeader("ts-lb", "nodekey:1234abcd"));
+
+            byte[] block = encoder.Encode(headers);
+
+            // :method POST e :scheme https sono voci esatte della tabella
+            // statica (3 e 7), quindi escono come campo indicizzato.
+            T.Eq("83", T.ToHex(new byte[] { block[0] }), "encoder: :method POST indicizzato (3)");
+
+            HpackDecoder decoder = new HpackDecoder(NullLogSink.Instance);
+            List<HpackHeader> back = decoder.Decode(block);
+            T.Eq(6, back.Count, "encoder: round trip, sei header");
+            T.Eq("POST", back[0].Value, "encoder: round trip, metodo");
+            T.Eq("/machine/map", back[3].Value, "encoder: round trip, percorso");
+            T.Eq("ts-lb", back[5].Name, "encoder: round trip, nome non in tabella");
+            T.Eq("nodekey:1234abcd", back[5].Value, "encoder: round trip, valore non in tabella");
+
+            // Un nome che sta in tabella non viene ripetuto come stringa. Il
+            // confronto va fatto senza Huffman, altrimenti nessun nome compare
+            // come testo nel blocco e l'asserzione non proverebbe nulla.
+            HpackEncoder plain = new HpackEncoder(false);
+            List<HpackHeader> names = new List<HpackHeader>();
+            names.Add(new HpackHeader("content-type", "application/json"));
+            names.Add(new HpackHeader("x-tailscale-hostinfo", "linux"));
+            byte[] plainBlock = plain.Encode(names);
+
+            T.False(Contains(plainBlock, "content-type"),
+                    "encoder: un nome in tabella non compare come testo (indice 31)");
+            T.True(Contains(plainBlock, "application/json"),
+                   "encoder: il valore compare come testo (senza Huffman)");
+            T.True(Contains(plainBlock, "x-tailscale-hostinfo"),
+                   "encoder: un nome fuori tabella compare come testo");
+        }
+
+        /// <summary>Vero se i byte contengono il testo dato (latin-1).</summary>
+        private static bool Contains(byte[] haystack, string needle)
+        {
+            if (needle.Length == 0 || haystack.Length < needle.Length) return false;
+            for (int i = 0; i + needle.Length <= haystack.Length; i++)
+            {
+                bool match = true;
+                for (int j = 0; j < needle.Length; j++)
+                {
+                    if (haystack[i + j] != (byte)needle[j]) { match = false; break; }
+                }
+                if (match) return true;
+            }
+            return false;
+        }
+
+        private static void EncoderWithoutHuffman()
+        {
+            // Senza Huffman i byte sono leggibili: serve quando un blocco va
+            // confrontato a mano con quello che dice un altro client.
+            HpackEncoder encoder = new HpackEncoder(false);
+            List<HpackHeader> headers = new List<HpackHeader>();
+            headers.Add(new HpackHeader(":path", "/machine/map"));
+
+            byte[] block = encoder.Encode(headers);
+            HpackDecoder decoder = new HpackDecoder(NullLogSink.Instance);
+            List<HpackHeader> back = decoder.Decode(block);
+            T.Eq(1, back.Count, "senza Huffman: un header");
+            T.Eq("/machine/map", back[0].Value, "senza Huffman: valore leggibile");
         }
 
         private static void RejectsIndexZero()

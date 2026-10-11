@@ -263,6 +263,152 @@ namespace Tailscale.Core.Protocol
     }
 
     /// <summary>
+    /// Encoder HPACK per le *richieste*.
+    ///
+    /// Non tiene una tabella dinamica: le nostre richieste sono poche e diverse
+    /// fra loro, quindi indicizzare le voci non guadagna nulla e in cambio si
+    /// terrebbe uno stato in piu' da sbagliare. Usa percio' i campi indicizzati
+    /// della tabella statica quando nome e valore coincidono, e altrimenti campi
+    /// literal con indicizzazione incrementale, che e' quello che fa anche il
+    /// client Go — il server si aspetta di vedere le sue voci comparire.
+    ///
+    /// I nomi che stanno in tabella si riferiscono per indice: mandare il nome
+    /// come stringa e' legale ma spreca byte e, soprattutto, allena il decoder
+    /// del server con un comportamento diverso dal solito.
+    /// </summary>
+    public sealed class HpackEncoder
+    {
+        private readonly bool _huffman;
+
+        public HpackEncoder(bool huffman)
+        {
+            _huffman = huffman;
+        }
+
+        public byte[] Encode(IList<HpackHeader> headers)
+        {
+            if (headers == null) throw new ArgumentNullException("headers");
+
+            List<byte> output = new List<byte>();
+            for (int i = 0; i < headers.Count; i++)
+            {
+                HpackHeader header = headers[i];
+
+                int exact = FindStatic(header.Name, header.Value);
+                if (exact > 0)
+                {
+                    // RFC 7541 §6.1: indice con bit piu' significativo a 1.
+                    WriteInteger(output, 0x80, 7, exact);
+                    continue;
+                }
+
+                int nameIndex = FindStaticName(header.Name);
+                WriteInteger(output, 0x40, 6, nameIndex);
+                if (nameIndex == 0) WriteString(output, header.Name);
+                WriteString(output, header.Value);
+            }
+
+            return output.ToArray();
+        }
+
+        private void WriteString(List<byte> output, string text)
+        {
+            if (_huffman)
+            {
+                List<byte> encoded = new List<byte>(text.Length);
+                EncodeHuffman(encoded, text);
+                WriteInteger(output, 0x80, 7, encoded.Count);
+                output.AddRange(encoded);
+                return;
+            }
+
+            byte[] raw = new byte[text.Length];
+            for (int i = 0; i < text.Length; i++)
+            {
+                if (text[i] > 0xFF)
+                    throw new HpackException("valore non latin-1 in un header: " + text[i]);
+                raw[i] = (byte)text[i];
+            }
+
+            WriteInteger(output, 0x00, 7, raw.Length);
+            output.AddRange(raw);
+        }
+
+        /// <summary>Accoda i bit dei codici di Huffman, con riempimento a uno in coda.</summary>
+        private static void EncodeHuffman(List<byte> output, string text)
+        {
+            long accumulator = 0;
+            int bits = 0;
+
+            for (int i = 0; i < text.Length; i++)
+            {
+                int symbol = text[i];
+                if (symbol > 0xFF)
+                    throw new HpackException("carattere non latin-1 in un header: " + symbol);
+
+                int length = HpackTables.HuffmanLengths[symbol];
+                accumulator = (accumulator << length) | (uint)HpackTables.HuffmanCodes[symbol];
+                bits += length;
+
+                while (bits >= 8)
+                {
+                    bits -= 8;
+                    output.Add((byte)((accumulator >> bits) & 0xFF));
+                }
+            }
+
+            if (bits > 0)
+            {
+                // Il riempimento e' il prefisso del codice di EOS: tutti uno.
+                int padding = 8 - bits;
+                accumulator = (accumulator << padding) | ((1L << padding) - 1);
+                output.Add((byte)(accumulator & 0xFF));
+            }
+        }
+
+        /// <summary>Intero con prefisso e continuazione (RFC 7541 §5.1), in scrittura.</summary>
+        private static void WriteInteger(List<byte> output, int prefix, int prefixBits, int value)
+        {
+            int mask = (1 << prefixBits) - 1;
+            if (value < mask)
+            {
+                output.Add((byte)(prefix | value));
+                return;
+            }
+
+            output.Add((byte)(prefix | mask));
+            value -= mask;
+            while (value >= 128)
+            {
+                output.Add((byte)((value & 0x7F) | 0x80));
+                value >>= 7;
+            }
+            output.Add((byte)value);
+        }
+
+        /// <summary>Indice della voce (nome, valore) nella tabella statica, o 0.</summary>
+        private static int FindStatic(string name, string value)
+        {
+            for (int i = 1; i <= HpackTables.StaticTableLength; i++)
+            {
+                if (HpackTables.StaticNames[i] == name && HpackTables.StaticValues[i] == value)
+                    return i;
+            }
+            return 0;
+        }
+
+        /// <summary>Indice di una voce con questo nome, o 0 se il nome non e' in tabella.</summary>
+        private static int FindStaticName(string name)
+        {
+            for (int i = 1; i <= HpackTables.StaticTableLength; i++)
+            {
+                if (HpackTables.StaticNames[i] == name) return i;
+            }
+            return 0;
+        }
+    }
+
+    /// <summary>
     /// Decodifica di Huffman di HPACK (RFC 7541 §5.2 e Appendice B).
     ///
     /// I codici sono liberi da prefissi, quindi si accumulano bit finche' quello
