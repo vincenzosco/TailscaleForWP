@@ -2,7 +2,6 @@ using System;
 using System.Threading.Tasks;
 using Tailscale.Core;
 using Tailscale.Core.Control;
-using Tailscale.Core.Keys;
 using Windows.Security.ExchangeActiveSyncProvisioning;
 using Windows.System;
 
@@ -24,11 +23,19 @@ namespace Tailscale.Services
         /// <summary>Un'ora: l'app resta in ascolto dell'esito del login finche' e' aperta.</summary>
         private const int PhoneLoginSeconds = 3600;
 
-        private readonly RingLogSink _log = new RingLogSink(LogLines);
+        /// <summary>Le ultime righe, quelle che la schermata mostra.</summary>
+        private readonly RingLogSink _ring = new RingLogSink(LogLines);
+
+        /// <summary>Il registro su file: e' quello che sopravvive alla chiusura dell'app.</summary>
+        private readonly TailLogFile _fileLog;
+
+        /// <summary>Dove va ogni riga: la schermata e il file.</summary>
+        private readonly ILogSink _log;
+
         private readonly object _gate = new object();
 
         private ControlClient _client;
-        private PhoneStateStore _state;
+        private VaultBackedStateStore _state;
         private bool _started;
 
         /// <summary>Vero se l'app si e' sospesa con il motore in moto: al ritorno si riparte.</summary>
@@ -36,7 +43,21 @@ namespace Tailscale.Services
 
         public static readonly EngineService Current = new EngineService();
 
-        private EngineService() { }
+        private EngineService()
+        {
+            // Due destinazioni, una riga: le ultime righe per quello che si vede, e
+            // un file perche' la diagnosi sopravviva alla sospensione, alla chiusura
+            // e alla morte dell'app — prima di questo, un guasto sul telefono lasciava
+            // solo cio' che l'utente aveva il tempo di copiare a mano dallo schermo.
+            // Il file vero nasce alla prima riga: qui si costruisce solo la politica.
+            _fileLog = new TailLogFile(new WinRtLogFile(), Snapshot, LogLines * 2, _ring);
+            _log = new FanoutLogSink(_ring, _fileLog);
+        }
+
+        private string[] Snapshot()
+        {
+            return _ring.Snapshot();
+        }
 
         /// <summary>Cambiato qualcosa che la UI mostra: stato, netmap o registro.</summary>
         public event Action Changed;
@@ -72,7 +93,13 @@ namespace Tailscale.Services
         /// <summary>Le ultime righe di registro, dalla piu' vecchia alla piu' recente.</summary>
         public string[] Log
         {
-            get { return _log.Snapshot(); }
+            get { return _ring.Snapshot(); }
+        }
+
+        /// <summary>Dove l'app scrive il registro, cosi' si puo' tirare fuori dal telefono.</summary>
+        public string LogFileLocation
+        {
+            get { return _fileLog.Location; }
         }
 
         /// <summary>
@@ -89,13 +116,14 @@ namespace Tailscale.Services
             }
 
             _log.Log("avvio del motore");
+            _log.Log("registro su file: " + LogFileLocation);
             DeviceName = ReadDeviceName();
             _log.Log("dispositivo: " + DeviceName);
             // La pagina si ridisegna subito: al ritorno da una sospensione l'utente deve
             // vedere che il motore e' ripartito, invece di una schermata vecchia.
             RaiseChanged();
 
-            _state = new PhoneStateStore(_log);
+            _state = new VaultBackedStateStore(new LocalSettingsAdapter(), new PasswordVaultAdapter(), _log);
 
             ControlClientOptions options = new ControlClientOptions();
             options.Hostname = DeviceName;
@@ -118,7 +146,28 @@ namespace Tailscale.Services
             // "Accesso richiesto" anche se l'accesso e' stato completato.
             options.LoginTimeoutSeconds = PhoneLoginSeconds;
 
-            RandomSourceIsUsable(options.Random, _log);
+            // La sorgente casuale si controlla **prima** di costruire il client: una
+            // sorgente che ripete la stessa sequenza produrrebbe la stessa identita' a
+            // ogni avvio, il server rifiuterebbe quella node key perche' gia' nota, e
+            // l'app finirebbe in un errore definitivo che non spiega niente. Il
+            // controllo sta nel core (con il suo test); qui si obbedisce al risultato.
+            if (!RandomSourceCheck.IsUsable(options.Random, _log))
+            {
+                _log.Log("il motore non parte: la sorgente casuale del sistema non e' utilizzabile");
+                lock (_gate) _started = false;
+                RaiseChanged();
+                return;
+            }
+
+            // Il portachiavi si verifica all'avvio: se il sistema accetta la
+            // scrittura ma restituisce altro in lettura, l'identita' non sopravvive al
+            // riavvio. Non e' fatale — l'app funziona, semplicemente non ricorda chi
+            // e' — quindi si prosegue, ma la riga dice la conseguenza, non il guasto.
+            if (!_state.Keys.Verify(options.Random))
+            {
+                _log.Log("portachiavi: l'identita' non sopravvivera' al riavvio "
+                         + "(il dispositivo apparira' nuovo a ogni avvio)");
+            }
 
             ControlClient client;
             try
@@ -238,29 +287,6 @@ namespace Tailscale.Services
             try { client.Logout(); }
             catch (Exception ex) { _log.Log("logout fallito: " + ex.Message); }
             RaiseChanged();
-        }
-
-        /// <summary>
-        /// Il core rifiuta una chiave degenere, ma non puo' vedere una sorgente che
-        /// riempie con la **stessa sequenza** a ogni chiamata: due estrazioni identiche
-        /// significherebbero la stessa identita' a ogni avvio, e quindi la stessa node
-        /// key rifiutata per sempre dal server. Qui si guarda una volta, all'avvio.
-        /// </summary>
-        private static bool RandomSourceIsUsable(IRandomSource random, ILogSink log)
-        {
-            byte[] first = new byte[32];
-            byte[] second = new byte[32];
-            random.NextBytes(first);
-            random.NextBytes(second);
-
-            for (int i = 0; i < first.Length; i++)
-            {
-                if (first[i] != second[i]) return true;
-            }
-
-            log.Log("ERRORE: la sorgente casuale del sistema restituisce sempre gli stessi byte; "
-                    + "le chiavi sarebbero identiche a ogni avvio");
-            return false;
         }
 
         private void OnClientChanged()
