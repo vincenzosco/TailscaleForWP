@@ -188,8 +188,15 @@ namespace Tailscale.Core.Control
             // l'identita' vecchia e il suo URL vengono scartati insieme.
             if (_options.State != null) RestoreState();
 
-            bool hasStoredIdentity = _options.MachineKeyPair != null && _options.NodeKey != null;
-            if (hasStoredIdentity && _options.State != null && !HasAuthorizedIdentity())
+            // Serve un'identita' completa **e** autorizzata. Se una delle due chiavi
+            // manca — per esempio perche' quella salvata era degenere e RestoreState
+            // l'ha scartata — si rigenera tutto: una machine key nuova con una node key
+            // vecchia non e' un'identita', e' la chiave che il server rifiuta.
+            bool reusable = _options.State != null
+                            && _options.MachineKeyPair != null
+                            && _options.NodeKey != null
+                            && HasAuthorizedIdentity();
+            if (_options.State != null && !reusable)
             {
                 RegenerateIdentity();
             }
