@@ -169,10 +169,20 @@ namespace Tailscale.Core.Control
 
             _options = options;
 
-            // Prima si recupera quello che c'e' gia': generare chiavi nuove a ogni
-            // avvio farebbe apparire il telefono come un nodo diverso a ogni lancio,
-            // e il tailnet si riempirebbe di dispositivi fantasma.
+            // Prima si recupera quello che c'e' gia'. Le chiavi salvate si riusano
+            // solo se l'ultimo esito e' stato un'autorizzazione, o se c'e' un login
+            // gia' in corso (il cui URL e' legato a quella node key); altrimenti il
+            // tentativo di login parte da un'identita' nuova. E' la chiave vecchia,
+            // nota al server anche dopo la cancellazione del device dal pannello
+            // admin, a produrre "device with nodekey:... already exists".
             if (_options.State != null) RestoreState();
+
+            bool hasStoredIdentity = _options.MachineKeyPair != null && _options.NodeKey != null;
+            if (hasStoredIdentity && _options.State != null
+                && _status.LoginUrl == null && !HasAuthorizedIdentity())
+            {
+                RegenerateIdentity();
+            }
 
             if (_options.MachineKeyPair == null)
             {
@@ -192,6 +202,12 @@ namespace Tailscale.Core.Control
         private const string StateMachineKey = "machineKey";
         private const string StateNodeKey = "nodeKey";
         private const string StateAuthUrl = "authUrl";
+
+        /// <summary>
+        /// Prova che l'identita' salvata apparteneva a un nodo gia' autorizzato.
+        /// Senza questa prova le chiavi non si riusano (vedi il costruttore).
+        /// </summary>
+        private const string StateAuthorized = "authorized";
 
         /// <summary>Rilegge chiavi e URL salvati. Un valore illeggibile si logga e si rigenera.</summary>
         private void RestoreState()
@@ -252,6 +268,35 @@ namespace Tailscale.Core.Control
             else _options.State.Write(StateAuthUrl, url);
         }
 
+        /// <summary>Vero se lo stato salvato dice che il nodo era gia' autorizzato.</summary>
+        private bool HasAuthorizedIdentity()
+        {
+            return _options.State != null && _options.State.Read(StateAuthorized) == "1";
+        }
+
+        /// <summary>Da chiamare solo quando il server ha confermato l'autorizzazione.</summary>
+        private void SaveAuthorizedIdentity()
+        {
+            if (_options.State == null) return;
+            _options.State.Write(StateAuthorized, "1");
+        }
+
+        /// <summary>
+        /// Sostituisce l'identita' del client con una nuova (machine key + node key).
+        /// L'ordine conta: prima le chiavi, poi lo store, e per ultima la connessione,
+        /// perche' l'handshake Noise e' legato alla machine key e va rifatto.
+        /// </summary>
+        private void RegenerateIdentity()
+        {
+            _options.MachineKeyPair = KeyPair.Generate(_options.Random);
+            _options.NodeKey = GenerateNodeKey();
+            _oldNodeKey = null;
+            SaveMachineKey();
+            SaveNodeKey();
+            if (_options.State != null) _options.State.Delete(StateAuthorized);
+            DisposeConnection();
+        }
+
         public ControlStatus Status
         {
             get { lock (_gate) return _status.Clone(); }
@@ -285,14 +330,16 @@ namespace Tailscale.Core.Control
                 _options.State.Delete(StateMachineKey);
                 _options.State.Delete(StateNodeKey);
                 _options.State.Delete(StateAuthUrl);
+                _options.State.Delete(StateAuthorized);
             }
 
             lock (_gate) _status.LoginUrl = null;
 
-            _options.MachineKeyPair = KeyPair.Generate(_options.Random);
-            _options.NodeKey = GenerateNodeKey();
-            SaveMachineKey();
-            SaveNodeKey();
+            // Il nodo nuovo non ha una chiave precedente da dichiarare: lasciare
+            // OldNodeKey valorizzato direbbe al server una relazione che non c'e'.
+            _oldNodeKey = null;
+
+            RegenerateIdentity();
             _options.Log.Log("logout: chiavi dimenticate e rigenerate");
         }
 
@@ -346,6 +393,11 @@ namespace Tailscale.Core.Control
         public void Start()
         {
             _stopping = false;
+            // Il limite di un solo ricaricamento delle chiavi vale per questa
+            // connessione, non per tutta la vita del processo: senza l'azzeramento,
+            // un 401 arrivato dopo il primo non ricaricherebbe piu' nulla e
+            // resterebbe un errore definitivo anche quando basta rifare l'handshake.
+            _reloadedKeys = false;
 
             try
             {
@@ -490,6 +542,12 @@ namespace Tailscale.Core.Control
                 // restasse, al prossimo avvio l'app inviterebbe ad accedere un
                 // dispositivo che e' gia' dentro.
                 SaveAuthUrl(null);
+                // Il nodo e' autorizzato: e' l'unica prova che permette di riusare
+                // queste chiavi al prossimo avvio senza diventare un altro device.
+                SaveAuthorizedIdentity();
+                // La dichiarazione di chiave precedente ha esaurito il suo scopo:
+                // tenerla significherebbe rimandarla a ogni registrazione futura.
+                _oldNodeKey = null;
                 _options.Log.Log("nodo autorizzato; ultimo login: " + parsed.LoginName);
                 return true;
             }
