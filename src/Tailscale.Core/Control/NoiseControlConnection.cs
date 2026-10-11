@@ -183,7 +183,9 @@ namespace Tailscale.Core.Control
             }
 
             Stream stream = response.Body;
-            int messages = 0;                using (Watchdog watchdog = new Watchdog(this, watchdogSeconds, "la netmap", true))
+            int messages = 0;
+
+            using (Watchdog watchdog = new Watchdog(this, watchdogSeconds, "la netmap", true))
             {
                 while (true)
                 {
