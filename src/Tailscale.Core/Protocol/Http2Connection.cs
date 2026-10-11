@@ -303,7 +303,7 @@ namespace Tailscale.Core.Protocol
             }
             catch (IOException ex)
             {
-                throw new Http2Exception("lettura di un frame HTTP/2 fallita: " + ex.Message);
+                throw new Http2Exception("lettura di un frame HTTP/2 fallita: " + ex.Message, ex);
             }
 
             _log.Log("http2: <- " + frame);

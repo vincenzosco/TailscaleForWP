@@ -9,6 +9,13 @@ namespace Tailscale.Core.Protocol
     public class Http2Exception : Exception
     {
         public Http2Exception(string message) : base(message) { }
+
+        /// <summary>
+        /// Con la causa: un guasto di lettura (socket chiuso, lettura interrotta dal
+        /// sistema) va distinto da un protocollo violato, e chi deve decidere se
+        /// rifare il canale non puo' farlo se la causa e' stata buttata via qui.
+        /// </summary>
+        public Http2Exception(string message, Exception inner) : base(message, inner) { }
     }
 
     /// <summary>Tipi di frame usati (RFC 9113 §6). Gli altri non ci interessano.</summary>
