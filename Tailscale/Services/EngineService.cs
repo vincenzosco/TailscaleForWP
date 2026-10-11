@@ -31,6 +31,9 @@ namespace Tailscale.Services
         private PhoneStateStore _state;
         private bool _started;
 
+        /// <summary>Vero se l'app si e' sospesa con il motore in moto: al ritorno si riparte.</summary>
+        private bool _resumePending;
+
         public static readonly EngineService Current = new EngineService();
 
         private EngineService() { }
@@ -88,6 +91,9 @@ namespace Tailscale.Services
             _log.Log("avvio del motore");
             DeviceName = ReadDeviceName();
             _log.Log("dispositivo: " + DeviceName);
+            // La pagina si ridisegna subito: al ritorno da una sospensione l'utente deve
+            // vedere che il motore e' ripartito, invece di una schermata vecchia.
+            RaiseChanged();
 
             _state = new PhoneStateStore(_log);
 
@@ -157,7 +163,36 @@ namespace Tailscale.Services
             _log.Log("arresto del motore");
             try { client.Stop(); }
             catch (Exception ex) { _log.Log("errore in arresto: " + ex.Message); }
+
+            // Un motore fermo si puo' riaccendere: senza questo azzeramento Start()
+            // esce subito, e dopo una sospensione l'app resterebbe ferma per sempre.
+            lock (_gate) _started = false;
             RaiseChanged();
+        }
+
+        /// <summary>
+        /// L'app va in secondo piano. Il motore lo fermiamo noi, adesso, invece di
+        /// lasciare che sia il sistema a interrompere la lettura in corso: un socket
+        /// chiuso da noi e' un arresto riconosciuto, e non diventa un errore. Di cosa
+        /// stava facendo si tiene memoria solo per il ritorno.
+        /// </summary>
+        public void Suspend()
+        {
+            _resumePending = IsStarted;
+            Stop();
+        }
+
+        /// <summary>
+        /// L'app torna in primo piano. Se il motore stava girando riparte: il canale
+        /// di controllo viene rifatto (quello di prima e' morto con la sospensione) e
+        /// la netmap riletta, riusando l'identita' salvata -- il device nel tailnet
+        /// resta uno.
+        /// </summary>
+        public void Resume()
+        {
+            if (!_resumePending) return;
+            _resumePending = false;
+            Start();
         }
 
         /// <summary>

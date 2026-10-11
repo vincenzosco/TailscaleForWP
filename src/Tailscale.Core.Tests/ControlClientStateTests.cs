@@ -33,6 +33,7 @@ namespace Tailscale.Core.Tests
             Case("canale interrotto: la registrazione riprova", ChannelFailureDuringRegisterIsRetried);
             Case("canale interrotto sempre: si smette con un errore", RegisterGivesUpAfterTheBudget);
             Case("arresto durante la registrazione: non e' un errore", StoppingIsNotAnError);
+            Case("riavvio dopo l'arresto: si registra di nuovo", RestartAfterStopRegistersAgain);
         }
 
         private static void Case(string name, Action test)
@@ -374,6 +375,49 @@ namespace Tailscale.Core.Tests
                     "arresto: nessun errore per una cosa voluta");
             T.Eq(ControlState.Stopped.ToString(), client.Status.State.ToString(),
                  "arresto: lo stato resta Fermo, non diventa Error");
+        }
+
+        /// <summary>
+        /// Il motore del telefono viene fermato quando l'app si sospende e riavviato
+        /// al ritorno: se un secondo Start() non rifacesse il lavoro, dopo una
+        /// sospensione l'app resterebbe ferma per sempre -- ed e' il sintomo che
+        /// l'utente vede. Il comportamento c'e' gia': il test lo fissa perche' la
+        /// ripresa ci poggia sopra e nulla nel progetto lo difendeva.
+        /// </summary>
+        private static void RestartAfterStopRegistersAgain()
+        {
+            MemoryStateStore store = new MemoryStateStore();
+            FakeConnection connection = new FakeConnection();
+            connection.RegisterBody = AuthorizedResponse();
+
+            List<string> captured = new List<string>();
+            ControlClientOptions options = Options(store, connection);
+            options.Log = new DelegateLogSink(captured.Add);
+
+            ControlClient[] holder = new ControlClient[1];
+            int sleeps = 0;
+            options.Sleep = delegate(int milliseconds)
+            {
+                sleeps++;
+                if (sleeps > 2 && holder[0] != null) holder[0].Stop();
+            };
+
+            ControlClient client = new ControlClient(options);
+            holder[0] = client;
+
+            client.Start();
+            T.Eq(1, connection.RegisterCalls, "avvio: la registrazione parte");
+
+            // E' la sospensione: l'app ferma il motore chiudendo lei il socket.
+            client.Stop();
+            sleeps = 0;
+
+            // E' la ripresa: il motore deve rimettersi in moto da solo.
+            client.Start();
+
+            T.Eq(2, connection.RegisterCalls, "riavvio: dopo Stop il client si registra di nuovo");
+            T.True(HasLine(captured, "stato: Stopped -> Connecting"), "riavvio: si riparte da fermo");
+            T.True(client.Status.State != ControlState.Error, "riavvio: nessun errore");
         }
 
         /// <summary>La risposta esatta con cui il control server rifiuta una node key ancora nota.</summary>

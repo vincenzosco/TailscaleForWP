@@ -293,6 +293,15 @@ Scelte che vale la pena conoscere leggendo il codice:
    Il client se ne accorge dall'errore `device with nodekey:... already exists`,
    genera un'identità nuova (machine key + node key) e riprova. Per questo, se
    l'app non risultava autorizzata, al primo login compare un device nuovo.
+7. **Il sistema può interrompere una lettura sul socket del control server**
+   (sospensione dell'app, socket chiuso di colpo): l'errore è
+   `The I/O operation has been aborted because of either a thread exit or an
+   application request` (`0x800703E3`). Il client lo riconosce come guasto di
+   canale, dichiara rotto il canale, lo rifa' e riprova -- fino a
+   `MaxChannelRetries` volte per la registrazione, poi mostra un errore invece di
+   ritentare per sempre. Alla sospensione il motore lo ferma l'app chiudendo lei il
+   socket, e al ritorno in primo piano riparte da solo riusando l'identità salvata:
+   il device nel tailnet resta uno.
 
 ## Sicurezza
 
