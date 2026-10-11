@@ -25,8 +25,7 @@ repository contains the proof, not just the code.
 | Localization (en-US, it-IT) | Resources done | The `it` language package contains the translated strings; the accessor is missing |
 
 Honest detail: **the app cannot log in yet**. The handshake works against the
-real server, registration does not. The reason is documented with the evidence,
-not hidden: see `docs/superpowers/plans/2026-10-11-wp81-tailscale-1-control-plane-login.md`.
+real server, registration does not.
 
 ## The proof that matters
 
