@@ -12,6 +12,7 @@ namespace Tailscale.Core.Tests
             Run("smoke", SmokeTests.Run);
             Run("protocol constants", ProtocolConstantsTests.Run);
             Run("x25519", X25519Tests.Run);
+            Run("chacha20poly1305", ChaCha20Poly1305Tests.Run);
 
             Console.WriteLine(T.Failures == 0 ? "ALL PASS" : "FAILURES: " + T.Failures);
             return T.Failures;
