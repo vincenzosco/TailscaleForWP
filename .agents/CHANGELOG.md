@@ -69,6 +69,38 @@ registro: le righe vecchie vengono tagliate`, exit 4). Ripristinate le tre righe
 la stessa suite torna `ALL PASS` con exit 0: i test non passano per costruzione,
 passano perché il codice fa la cosa giusta.
 
+**Il motore fermato dal tetto (piano 17).** La traccia incollata dal telefono
+(`IOException` con `0x800703E3` -> `Http2Exception` -> `ControlStreamException`) e'
+la classe del piano 13, ed e' assorbita: quello che mancava e' cosa succede
+**dopo** che il tetto dei tentativi finisce. Il ciclo del client usciva, ma il flag
+"avviato" che l'app teneva per conto suo restava acceso: in stato di errore il
+pulsante principale chiamava un avvio che usciva subito, e l'app restava bloccata
+finche' non la si ammazzava (anche `Suspend()` credeva che il motore fosse in moto).
+
+- la regola sta nel core: `src/Tailscale.Core/Util/EngineRunState.cs` fa girare un
+  solo ciclo per volta e libera il motore quando il ciclo esce, anche se esce per
+  un'eccezione (il `finally` e' dentro il core, non nell'app); sei casi in
+  `src/Tailscale.Core.Tests/EngineRunStateTests.cs`;
+- `Tailscale/Services/EngineService.cs` non ha piu' un flag proprio: `IsStarted` e'
+  lo stato del ciclo, `Suspend()` e `Resume()` leggono la verita', un secondo
+  avvio mentre il ciclo gira viene rifiutato e lo dice, e il ciclo del client non
+  gira piu' su un terzo thread;
+- i due messaggi terminali non promettono piu' un tentativo che nessuno fa:
+  dicono che il motore si e' fermato e si puo' riavviare, e i test fissano
+  entrambe le meta' della promessa.
+
+**Verifiche del piano 17:** gate verde (`CHECK-ALL OK`, exit 0: skill, pin, risorse,
+anteprima e OCR, test `ALL PASS`, CLI `selftest`, app ARM con il pacchetto); i due
+casi dei messaggi visti rossi prima della correzione (`FAILURES: 4`, exit 4) e
+verdi dopo; mutazione del `finally` (il ciclo non libera piu' il motore) ->
+`FAILURES: 10`, exit 10, ripristino byte a byte dal backup del workspace e
+`ALL PASS` con exit 0.
+
+**Limite del piano 17:** la prova sul pulsante richiede un telefono (qui non c'e'
+nemmeno l'emulatore): resta la voce mensile di `.agents/MAINTENANCE.md`. La finestra
+fra `Start()` e `Suspend()` nello stesso giro della UI thread resta com'e' (rara,
+esito benigno) ed e' dichiarata nel piano.
+
 **Limiti noti:** la verifica su un telefono vero resta da fare (nessun emulatore
 né dispositivo in questo ambiente, come nei piani precedenti); le scadenze sono
 provate su stream in memoria, dove finiscono con una lettura a zero byte invece
