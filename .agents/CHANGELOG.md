@@ -47,6 +47,31 @@ coda limitata (400 righe, la politica è nel core con i suoi test) e la procedur
 `ISETool.exe ts de|xd 563a8f70-0e06-4690-b075-3963581a75c8 <cartella>` per tirarlo
 giù sul PC.
 
+**La prova sul telefono vero (2026-10-11).** L'app è stata eseguita su un
+dispositivo WP8.1 reale, e il registro che ora scrive da sola è stato tirato giù
+dal dispositivo con `ISETool.exe ts de` (in `C:\temp\registro\IsolatedStore\`).
+Quello che il registro mostra, nell'ordine:
+
+- `registro su file: C:\Data\Users\DefApps\...\LocalState\registro.log`: il file
+  del registro è scritto davvero sul telefono (piano 16);
+- `portachiavi: chiave macchina salvata` due volte e poi `portachiavi: scrittura e
+  rilettura verificate`: la verifica del portachiavi è **chiamata** e passa — era
+  il controllo che nessuno eseguiva;
+- chiavi del server via HTTPS, `ts2021: upgrade accettato su
+  http://controlplane.tailscale.com:80`, early payload consumato, e
+  `http: /machine/register -> 200` con `machineAuthorized=True`;
+- netmap aperta e `stato: Connecting -> Authorized`: la lista peer è viva sul
+  dispositivo;
+- dopo una chiusura voluta, `canale di controllo: la netmap interrotta (...
+  0x800703E3)`: l'abort è riconosciuto e registrato anche sul telefono, e il
+  motore è stato riavviato **riusando la stessa node key**, quindi il tailnet
+  continua a vedere un solo dispositivo.
+
+Non dimostrati da questa esecuzione: il passo nel browser di un **primo** login
+(il dispositivo di quel registro era già autorizzato) e il percorso del piano 17
+dopo il tetto dei tentativi (nel registro non compare nessuna riga di budget
+esaurito).
+
 **Pin di protocollo:** invariato (`tools/refs.lock`, `tailscale` v1.104.1;
 18 costanti verificate).
 
