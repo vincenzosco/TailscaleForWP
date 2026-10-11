@@ -727,8 +727,11 @@ namespace Tailscale.Core.Control
                     {
                         _options.Log.Log("netmap non disponibile dopo " + _options.MaxChannelRetries
                                          + " tentativi: mi fermo e lo dico");
+                        // Il messaggio non promette un tentativo automatico, perche' non
+                        // ce n'e': il ciclo esce e riparte solo se qualcuno lo avvia. Una
+                        // promessa che nessuno mantiene e' peggio di nessun messaggio.
                         SetState(ControlState.Error, null,
-                                 "netmap non disponibile: nuovo tentativo fra poco");
+                                 "netmap non disponibile: il motore si e' fermato, si puo' riavviare");
                         return;
                     }
                 }
@@ -781,8 +784,10 @@ namespace Tailscale.Core.Control
             {
                 _options.Log.Log("canale di controllo non disponibile dopo " + _options.MaxChannelRetries
                                  + " tentativi (" + ex.Message + ")");
+                // Come per la netmap: il budget e' finito, il ciclo esce, e riparte
+                // quando qualcuno lo avvia. Il messaggio lo dice invece di rimandare.
                 SetState(ControlState.Error, null,
-                         "canale di controllo non disponibile: nuovo tentativo fra poco");
+                         "canale di controllo non disponibile: il motore si e' fermato, si puo' riavviare");
                 return false;
             }
 

@@ -364,6 +364,10 @@ namespace Tailscale.Core.Tests
                    "canale morto: il registro lo dice");
             T.Eq(ControlState.Error.ToString(), client.Status.State.ToString(),
                  "canale morto: dopo il tetto si mostra l'errore invece di ciclare");
+            T.True((client.Status.ErrorMessage ?? "").IndexOf("si puo' riavviare", StringComparison.Ordinal) >= 0,
+                   "canale morto: il messaggio dice che il motore si puo' riavviare");
+            T.True((client.Status.ErrorMessage ?? "").IndexOf("nuovo tentativo fra poco", StringComparison.Ordinal) < 0,
+                   "canale morto: e non promette un tentativo che nessuno fa");
         }
 
         /// <summary>
@@ -492,6 +496,10 @@ namespace Tailscale.Core.Tests
             T.True(HasLine(lines, "netmap non disponibile"), "netmap mai arrivata: il registro lo dice");
             T.Eq(ControlState.Error.ToString(), client.Status.State.ToString(),
                  "netmap mai arrivata: si mostra l'errore invece di ciclare in silenzio");
+            T.True((client.Status.ErrorMessage ?? "").IndexOf("si puo' riavviare", StringComparison.Ordinal) >= 0,
+                   "netmap mai arrivata: il messaggio dice che il motore si puo' riavviare");
+            T.True((client.Status.ErrorMessage ?? "").IndexOf("nuovo tentativo fra poco", StringComparison.Ordinal) < 0,
+                   "netmap mai arrivata: e non promette un tentativo che nessuno fa");
         }
 
         /// <summary>
