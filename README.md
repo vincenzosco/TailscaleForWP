@@ -80,6 +80,19 @@ src/Tailscale.Cli/bin/Release/Tailscale.Cli.exe probe       # HTTP/2 diagnostics
 src/Tailscale.Cli/bin/Release/Tailscale.Cli.exe login       # registration (blocked, see below)
 ```
 
+## Agents
+
+`.agents/skills/` holds five skills that a person or an agent can load by name
+(the `skill` tool, or `npx skills add`): a map of the repository and its
+platform constraints, the checklist for adding a feature end to end, how the
+in-house test runner is used, the catalogue for reading a control-plane failure
+out of the log, and the maintenance routine. They are not prose about the code:
+every path, command, symbol and log line they cite is checked against the
+sources by `tools/check-agents.py`, which runs inside `tools/check-all.cmd`. If
+the code changes and the skill no longer matches, the gate fails and names the
+skill. See `.agents/README.md` for the index and for what these skills cannot
+verify (anything that needs a phone).
+
 ## How it is built
 
 The same engine source is compiled **twice**: as a desktop library
@@ -258,6 +271,20 @@ src/Tailscale.Cli/bin/Release/Tailscale.Cli.exe handshake   # handshake contro i
 src/Tailscale.Cli/bin/Release/Tailscale.Cli.exe probe       # diagnostica HTTP/2
 src/Tailscale.Cli/bin/Release/Tailscale.Cli.exe login       # registrazione (bloccata, vedi sotto)
 ```
+
+## Agents
+
+`.agents/skills/` contiene cinque skill che una persona o un agente può caricare
+per nome (il tool `skill`, oppure `npx skills add`): la mappa del repository e i
+suoi vincoli di piattaforma, la checklist per aggiungere una funzione da capo a
+fondo, come si usa il runner di test in casa, il catalogo per leggere un guasto
+del control plane dal registro, e la routine di manutenzione. Non sono prosa sul
+codice: ogni percorso, comando, simbolo e riga di registro che citano è
+verificato contro i sorgenti da `tools/check-agents.py`, che gira dentro
+`tools/check-all.cmd`. Se il codice cambia e la skill non combacia più, il gate
+fallisce e nomina la skill. L'indice è in `.agents/README.md`, che dice anche
+cosa queste skill **non** possono verificare (tutto ciò che richiede un
+telefono).
 
 ## Com'è fatto
 
