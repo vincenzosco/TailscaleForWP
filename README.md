@@ -20,9 +20,10 @@ repository contains the proof, not just the code.
 | Server keys, ts2021 dialer, HTTP upgrade | **Done** | `Tailscale.Cli handshake` against `controlplane.tailscale.com` |
 | Noise transport framing | **Done** | In-memory tests, including authentication of every byte |
 | Node registration, netmap, login URL | **Done in code, outlined by tests** | In-memory tests for the state machine (deadlines, retries, netmap) and `Tailscale.Cli login` for the real server; the acceptance on a phone is still manual |
-| App UI (login, peer list) | Not started | — |
+| App UI (login, peer list, log panel) | **Done in code, outlined by tests** | `Tailscale/MainPage.xaml` and its code-behind, with every visible string checked by `tools/check-ui-resources.py`; the acceptance on a phone is still manual |
+| Phone log that survives the app | **Done** | The engine writes `LocalFolder\registro.log` (a bounded tail of 400 lines): the policy has tests in the core, the WinRT file is verified by the ARM build |
 | Logos and splash screens | **Done** | The package contains the images byte for byte |
-| Localization (en-US, it-IT) | Resources done | The `it` language package contains the translated strings; the accessor is missing |
+| Localization (en-US, it-IT) | **Done** | `ResourceLoader` in `Tailscale/MainPage.xaml.cs`; `tools/check-ui-resources.py` checks that every string exists in both languages |
 
 Honest detail: the handshake works against the real server, and registration,
 the netmap and the request deadlines are implemented and covered by the
@@ -77,7 +78,18 @@ depend on tailscale.com):
 ```bash
 src/Tailscale.Cli/bin/Release/Tailscale.Cli.exe handshake   # handshake against the real server
 src/Tailscale.Cli/bin/Release/Tailscale.Cli.exe probe       # HTTP/2 diagnostics
-src/Tailscale.Cli/bin/Release/Tailscale.Cli.exe login       # registration (blocked, see below)
+src/Tailscale.Cli/bin/Release/Tailscale.Cli.exe login       # registration: prints the login URL, the browser step needs a person
+```
+
+Manual checks that need a **phone** (not in the pipeline: there is no device
+here). The app writes its log to `LocalFolder\registro.log`, and the SDK can copy
+it to the PC — this is the difference between a failure that leaves evidence and
+one that leaves a screenshot:
+
+```bash
+C:\Program Files (x86)\Microsoft SDKs\Windows Phone\v8.1\Tools\IsolatedStorageExplorerTool\ISETool.exe EnumerateDevices
+ISETool.exe ts de 563a8f70-0e06-4690-b075-3963581a75c8 C:\temp\registro   # attached phone
+ISETool.exe ts xd 563a8f70-0e06-4690-b075-3963581a75c8 C:\temp\registro   # default emulator
 ```
 
 ## Agents
@@ -138,17 +150,15 @@ Choices worth knowing when reading the code:
    Until then Task 10 stays unverified.
 2. **No data plane.** No WireGuard, no SOCKS proxy: the app handles the control
    plane. The data plane is Plan 2, not started.
-3. **Localization has no accessor yet.** The translated strings are in the
-   package, but Task 2 of the localization plan is missing.
-4. The plan documents and the ledger live in `docs/`, which is **git-ignored** in
+3. The plan documents and the ledger live in `docs/`, which is **git-ignored** in
    this repository: they do not show up here on GitHub. If you need them
    versioned, remove `docs/` from `.gitignore`.
-5. **A device deleted from the admin panel does not free the node key on the
+4. **A device deleted from the admin panel does not free the node key on the
    server.** The client notices from the `device with nodekey:... already exists`
    error, generates a new identity (machine key + node key) and retries. Because
    of this, if the app was not authorized, the first login shows up as a new
    device.
-6. **The system can interrupt a read on the control socket** (the app is
+5. **The system can interrupt a read on the control socket** (the app is
    suspended, or the socket is closed abruptly): the error is
    `The I/O operation has been aborted because of either a thread exit or an
    application request` (`0x800703E3`). The client recognises it as a channel
@@ -157,7 +167,7 @@ Choices worth knowing when reading the code:
    retrying forever. The app itself stops the engine on suspension by closing
    the socket, and on the way back to the foreground the engine starts again
    with the saved identity: the device in the tailnet stays one.
-7. **No request waits forever any more.** Every request to the control server
+6. **No request waits forever any more.** Every request to the control server
    carries a deadline: short for a registration that is not a followup
    (`RegisterTimeoutSeconds`, 60s) and equal to the time left in the login window
    for a followup, because the server keeps that response open while the user
@@ -169,6 +179,15 @@ Choices worth knowing when reading the code:
    the user is looking at. The deadlines are verified on in-memory streams, where
    they end as a zero-byte read; on the phone the same `Dispose` produces the
    `0x800703E3` abort above, which is the case the phone check has to confirm.
+7. **The WinRT adapters have no automated tests.** `SocketStream`,
+   `PhoneStreamConnector`, `PhoneRandomSource`, `PhoneHttpFetcher`,
+   `PasswordVaultAdapter`, `LocalSettingsAdapter` and `WinRtLogFile` call APIs
+   that only exist on the phone, so no test on this PC can reach them. What was
+   moved out of them is the part that decides: the random source judgement, the
+   key vault policy, where the machine key is stored, and when the log file is
+   trimmed all live in the core and have tests. What is left is a call, verified
+   by the ARM build (which is what proves the API exists in the WP8.1 profile)
+   and by the phone check above.
 
 ## Security
 
@@ -212,9 +231,10 @@ questo repository contiene la prova, non solo il codice.
 | Chiavi del server, dialer ts2021, upgrade HTTP | **Fatto** | `Tailscale.Cli handshake` contro `controlplane.tailscale.com` |
 | Framing del trasporto Noise | **Fatto** | Test in memoria, inclusa l'autenticazione di ogni byte |
 | Registrazione del nodo, netmap, URL di login | **Fatto nel codice, delineato dai test** | Test in memoria per la macchina a stati (scadenze, ritentate, netmap) e `Tailscale.Cli login` per il server vero; l'accettazione sul telefono e' ancora manuale |
-| UI dell'app (login, lista peer) | Non iniziata | — |
+| UI dell'app (login, lista peer, pannello Registro) | **Fatta nel codice, delineata dai test** | `Tailscale/MainPage.xaml` e il suo code-behind, con ogni stringa visibile controllata da `tools/check-ui-resources.py`; l'accettazione sul telefono e' ancora manuale |
+| Registro del telefono che sopravvive all'app | **Fatto** | Il motore scrive `LocalFolder\registro.log` (una coda di 400 righe): la politica ha i test nel core, il file WinRT e' verificato dalla build ARM |
 | Loghi e splash screen | **Fatto** | Il pacchetto contiene le immagini byte per byte |
-| Localizzazione (en-US, it-IT) | Risorse fatte | Il pacchetto di lingua `it` contiene le stringhe tradotte; manca l'accessor |
+| Localizzazione (en-US, it-IT) | **Fatto** | `ResourceLoader` in `Tailscale/MainPage.xaml.cs`; `tools/check-ui-resources.py` verifica che ogni stringa esista in entrambe le lingue |
 
 Dettaglio onesto: l'handshake funziona contro il server vero, e registrazione,
 netmap e scadenze delle richieste sono implementate e coperte dai test in
@@ -269,7 +289,18 @@ dipendere da tailscale.com):
 ```bash
 src/Tailscale.Cli/bin/Release/Tailscale.Cli.exe handshake   # handshake contro il server vero
 src/Tailscale.Cli/bin/Release/Tailscale.Cli.exe probe       # diagnostica HTTP/2
-src/Tailscale.Cli/bin/Release/Tailscale.Cli.exe login       # registrazione (bloccata, vedi sotto)
+src/Tailscale.Cli/bin/Release/Tailscale.Cli.exe login       # registrazione: stampa l'URL di login, il passo nel browser richiede una persona
+```
+
+Verifiche manuali che richiedono un **telefono** (non nella pipeline: qui non c'e'
+un dispositivo). L'app scrive il registro in `LocalFolder\registro.log`, e l'SDK sa
+copiarlo sul PC: e' la differenza fra un guasto che lascia una prova e uno che
+lascia uno screenshoot:
+
+```bash
+C:\Program Files (x86)\Microsoft SDKs\Windows Phone\v8.1\Tools\IsolatedStorageExplorerTool\ISETool.exe EnumerateDevices
+ISETool.exe ts de 563a8f70-0e06-4690-b075-3963581a75c8 C:\temp\registro   # telefono collegato
+ISETool.exe ts xd 563a8f70-0e06-4690-b075-3963581a75c8 C:\temp\registro   # emulatore predefinito
 ```
 
 ## Agents
@@ -328,16 +359,14 @@ Scelte che vale la pena conoscere leggendo il codice:
    Fino ad allora il Task 10 resta non verificato.
 2. **Nessun data plane.** Niente WireGuard, niente proxy SOCKS: l'app gestisce il
    piano di controllo. Il piano dati è il Piano 2, non iniziato.
-3. **La localizzazione non ha ancora un accessor.** Le stringhe tradotte sono nel
-   pacchetto, ma manca il Task 2 del piano di localizzazione.
-4. I documenti di piano e il ledger vivono in `docs/`, che è **git-ignorato** in
+3. I documenti di piano e il ledger vivono in `docs/`, che è **git-ignorato** in
    questo repository: non compaiono qui su GitHub. Se ti servono versionati, va
    tolto `docs/` dal `.gitignore`.
-5. **Un device cancellato dal pannello admin non libera la node key sul server.**
+4. **Un device cancellato dal pannello admin non libera la node key sul server.**
    Il client se ne accorge dall'errore `device with nodekey:... already exists`,
    genera un'identità nuova (machine key + node key) e riprova. Per questo, se
    l'app non risultava autorizzata, al primo login compare un device nuovo.
-6. **Il sistema può interrompere una lettura sul socket del control server**
+5. **Il sistema può interrompere una lettura sul socket del control server**
    (sospensione dell'app, socket chiuso di colpo): l'errore è
    `The I/O operation has been aborted because of either a thread exit or an
    application request` (`0x800703E3`). Il client lo riconosce come guasto di
@@ -346,7 +375,7 @@ Scelte che vale la pena conoscere leggendo il codice:
    ritentare per sempre. Alla sospensione il motore lo ferma l'app chiudendo lei il
    socket, e al ritorno in primo piano riparte da solo riusando l'identità salvata:
    il device nel tailnet resta uno.
-7. **Nessuna richiesta resta appesa per sempre.** Ogni richiesta al control server
+6. **Nessuna richiesta resta appesa per sempre.** Ogni richiesta al control server
    porta con se' una scadenza: corta per una registrazione che non e' una followup
    (`RegisterTimeoutSeconds`, 60s) e pari al tempo che resta alla finestra di login
    per una followup, perche' il server tiene aperta quella risposta mentre l'utente
@@ -359,6 +388,15 @@ Scelte che vale la pena conoscere leggendo il codice:
    stream in memoria, dove finiscono con una lettura a zero byte; sul telefono lo
    stesso `Dispose` produce l'abort `0x800703E3` descritto sopra, ed e' il caso che
    la verifica sul telefono deve confermare.
+7. **Gli adattatori WinRT non hanno test automatici.** `SocketStream`,
+   `PhoneStreamConnector`, `PhoneRandomSource`, `PhoneHttpFetcher`,
+   `PasswordVaultAdapter`, `LocalSettingsAdapter` e `WinRtLogFile` chiamano API che
+   esistono solo sul telefono, quindi nessun test su questo PC può raggiungerle.
+   Quello che è stato portato fuori da loro è la parte che decide: il giudizio sulla sorgente casuale, la
+   politica del portachiavi, dove sta la chiave macchina e quando il file del
+   registro si taglia vivono nel core e hanno i loro test. Quello che resta è una
+   chiamata, verificata dalla build ARM (ed è lei a dimostrare che l'API esiste nel
+   profilo WP8.1) e dalla verifica sul telefono qui sopra.
 
 ## Sicurezza
 

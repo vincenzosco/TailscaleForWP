@@ -38,7 +38,11 @@ SKIP_PREFIXES = ("docs/", "refs/", ".superpowers/", "AppPackages/", "tools/tessd
 # Un output di build si riconosce anche quando bin/ o obj/ stanno in mezzo al
 # percorso (src/Tailscale.Cli/bin/Release/...exe).
 SKIP_PARTS = ("/bin/", "/obj/")
-SKIP_SUBSTRINGS = ("Program Files", "AppDeployCmd.exe")
+# Strumenti dell'SDK, non del repository: si citano per nome nei comandi che
+# qualcuno deve eseguire (ISETool.exe tira fuori il registro del telefono,
+# AppDeployCmd.exe dispiega il pacchetto), e pretenderli qui vorrebbe dire
+# cancellare la procedura dalle skill per far passare il controllo.
+SKIP_SUBSTRINGS = ("Program Files", "AppDeployCmd.exe", "ISETool.exe")
 
 EXTENSIONS = ("cs", "md", "py", "cmd", "bat", "resw", "resx", "xaml", "lock", "sln",
               "csproj", "vbproj", "exe", "txt", "json")
