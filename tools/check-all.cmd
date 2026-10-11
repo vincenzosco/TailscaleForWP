@@ -40,6 +40,12 @@ echo [4/5] CLI
 if exist src\Tailscale.Cli\Tailscale.Cli.csproj (
   %MSB% src\Tailscale.Cli\Tailscale.Cli.csproj -nologo -verbosity:minimal -p:Configuration=Release
   if errorlevel 1 exit /b 1
+  rem selftest e' offline: la pipeline non deve dipendere dalla rete verso tailscale.
+  src\Tailscale.Cli\bin\Release\Tailscale.Cli.exe selftest
+  if errorlevel 1 (
+    echo CLI SELFTEST FALLITO
+    exit /b 1
+  )
 )
 
 echo [5/5] App WP8.1 ARM

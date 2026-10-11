@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="12.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!--
+    CLI desktop. Serve a verificare il protocollo contro il control server reale
+    (controlplane.tailscale.com) con un comando che si puo' eseguire a mano e
+    incollare in un report, cosa che un test in-memory non permette.
+    Non e' compilata per il telefono: WP8.1 non ha una console.
+  -->
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{8B7E2D44-53C1-4F0E-9A2B-6D31E4C7B902}</ProjectGuid>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Tailscale.Cli</RootNamespace>
+    <AssemblyName>Tailscale.Cli</AssemblyName>
+    <TargetFrameworkVersion>v4.5</TargetFrameworkVersion>
+    <LangVersion>5</LangVersion>
+    <FileAlignment>512</FileAlignment>
+    <OutputPath>bin\$(Configuration)\</OutputPath>
+    <DebugType>pdbonly</DebugType>
+    <NoWarn>1591</NoWarn>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
+    <Optimize>true</Optimize>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="**\*.cs" Exclude="obj\**\*.cs;bin\**\*.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Tailscale.Core\Tailscale.Core.Desktop.csproj">
+      <Project>{2F1A4C10-6B3E-4C8A-9E11-5C0A7D1B2A01}</Project>
+      <Name>Tailscale.Core</Name>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>
