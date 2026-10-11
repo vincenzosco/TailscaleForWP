@@ -69,7 +69,7 @@ socket morto, ed è per questo che il client lo distingue.
 | `log:nessun dato per` + `log:la netmap` + `log:s, chiudo il canale` | il watchdog della netmap (120s, `src/Tailscale.Core/Protocol/ProtocolConstants.cs#MapStreamWatchdogSeconds`) ha chiuso un canale muto | atteso su una rete che si ferma: il ciclo si riconnette |
 | `log:stream della netmap chiuso; riconnessione` | il ciclo della netmap riparte **senza** cancellare i peer già mostrati | atteso |
 | `log:netmap non disponibile dopo ` | la netmap non è **mai** arrivata e i tentativi sono finiti (`src/Tailscale.Core/Control/ControlClient.cs#ReadMapOnce`): il client si ferma e lo dice | è il caso da riportare, con le righe precedenti |
-| `log:netmap non disponibile: nuovo tentativo fra poco` | è lo stato mostrato all'utente in quel caso | riportare insieme al registro |
+| `log:netmap non disponibile: il motore si e' fermato, si puo' riavviare` | la netmap non è mai arrivata e il budget è finito: il ciclo del motore è uscito di proposito (la riga sopra lo dice) | il pulsante principale lo rimette in moto; se non lo fa, è il caso da riportare insieme al registro |
 | `log:canale di controllo non disponibile dopo ` | il canale non torna: budget esaurito durante la registrazione | guasto vero: raccogliere le righe precedenti, non è una sospensione |
 | `log:login non completato entro ` | la finestra di login è finita senza che il browser risultasse usato (`src/Tailscale.Core/Control/ControlClient.cs#RemainingLoginSeconds`) | l'URL resta valido: l'utente lo riapre dal pulsante |
 | `log:nodo autorizzato; ultimo login: ` | la registrazione è conclusa: da qui in poi la netmap si legge da sola | nessuna |

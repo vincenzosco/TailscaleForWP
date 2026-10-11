@@ -19,7 +19,7 @@ repository contains the proof, not just the code.
 | Noise IK handshake (controlbase) | **Done** | **Against the real server**: `Tailscale.Cli handshake` |
 | Server keys, ts2021 dialer, HTTP upgrade | **Done** | `Tailscale.Cli handshake` against `controlplane.tailscale.com` |
 | Noise transport framing | **Done** | In-memory tests, including authentication of every byte |
-| Node registration, netmap, login URL | **Done in code, outlined by tests** | In-memory tests for the state machine (deadlines, retries, netmap) and `Tailscale.Cli login` for the real server; the acceptance on a phone is still manual |
+| Node registration, netmap, login URL | **Done in code, outlined by tests** | In-memory tests for the state machine (deadlines, retries, netmap) and `Tailscale.Cli login` for the real server; `src/Tailscale.Core.Tests/EngineRunStateTests.cs` for the engine that stops after the budget and starts again; the acceptance on a phone is still manual |
 | App UI (login, peer list, log panel) | **Done in code, outlined by tests** | `Tailscale/MainPage.xaml` and its code-behind, with every visible string checked by `tools/check-ui-resources.py`; the acceptance on a phone is still manual |
 | Phone log that survives the app | **Done** | The engine writes `LocalFolder\registro.log` (a bounded tail of 400 lines): the policy has tests in the core, the WinRT file is verified by the ARM build |
 | Logos and splash screens | **Done** | The package contains the images byte for byte |
@@ -174,10 +174,13 @@ Choices worth knowing when reading the code:
    signs in — a fixed value would either cut the browser off mid-login or outlive
    the window. A followup that expires is the end of the login window, not a
    channel failure: the state stays `NeedLogin` and the URL can be reopened. A
-   netmap that never arrives stops with an error after the channel budget, while
-   a netmap that arrived and was then lost keeps retrying without clearing what
-   the user is looking at. The deadlines are verified on in-memory streams, where
-   they end as a zero-byte read; on the phone the same `Dispose` produces the
+   netmap that never arrives stops with an error after   the channel budget, while a netmap that arrived and was then lost keeps
+   retrying without clearing what the user is looking at. When the budget runs out
+   the client stops and says so, and the main button starts the engine again: it is
+   the run's exit that declares the engine stopped, so an engine that stopped on
+   its own can no longer be mistaken for a running one. The deadlines are
+   verified on in-memory streams, where they end as a zero-byte read; on the phone
+   the same `Dispose` produces the
    `0x800703E3` abort above, which is the case the phone check has to confirm.
 7. **The WinRT adapters have no automated tests.** `SocketStream`,
    `PhoneStreamConnector`, `PhoneRandomSource`, `PhoneHttpFetcher`,
@@ -230,7 +233,7 @@ questo repository contiene la prova, non solo il codice.
 | Handshake Noise IK (controlbase) | **Fatto** | **Contro il server reale**: `Tailscale.Cli handshake` |
 | Chiavi del server, dialer ts2021, upgrade HTTP | **Fatto** | `Tailscale.Cli handshake` contro `controlplane.tailscale.com` |
 | Framing del trasporto Noise | **Fatto** | Test in memoria, inclusa l'autenticazione di ogni byte |
-| Registrazione del nodo, netmap, URL di login | **Fatto nel codice, delineato dai test** | Test in memoria per la macchina a stati (scadenze, ritentate, netmap) e `Tailscale.Cli login` per il server vero; l'accettazione sul telefono e' ancora manuale |
+| Registrazione del nodo, netmap, URL di login | **Fatto nel codice, delineato dai test** | Test in memoria per la macchina a stati (scadenze, ritentate, netmap) e `Tailscale.Cli login` per il server vero; `src/Tailscale.Core.Tests/EngineRunStateTests.cs` per il motore che si ferma dopo il tetto e riparte; l'accettazione sul telefono e' ancora manuale |
 | UI dell'app (login, lista peer, pannello Registro) | **Fatta nel codice, delineata dai test** | `Tailscale/MainPage.xaml` e il suo code-behind, con ogni stringa visibile controllata da `tools/check-ui-resources.py`; l'accettazione sul telefono e' ancora manuale |
 | Registro del telefono che sopravvive all'app | **Fatto** | Il motore scrive `LocalFolder\registro.log` (una coda di 400 righe): la politica ha i test nel core, il file WinRT e' verificato dalla build ARM |
 | Loghi e splash screen | **Fatto** | Il pacchetto contiene le immagini byte per byte |
@@ -384,7 +387,10 @@ Scelte che vale la pena conoscere leggendo il codice:
    guasto del canale: lo stato resta `NeedLogin` e l'URL si puo' riaprire. Una
    netmap che non arriva mai si ferma con un errore dopo il tetto dei tentativi,
    mentre una netmap gia' arrivata e poi persa continua a ritentare senza
-   cancellare quello che l'utente sta guardando. Le scadenze sono verificate su
+   cancellare quello che l'utente sta guardando. Quando il tetto finisce il client
+   si ferma e lo dice, e il pulsante principale rimette in moto il motore: e'
+   l'uscita del ciclo a dichiarare fermo il motore, cosi' un motore fermato da solo
+   non puo' piu' essere scambiato per uno in moto. Le scadenze sono verificate su
    stream in memoria, dove finiscono con una lettura a zero byte; sul telefono lo
    stesso `Dispose` produce l'abort `0x800703E3` descritto sopra, ed e' il caso che
    la verifica sul telefono deve confermare.
