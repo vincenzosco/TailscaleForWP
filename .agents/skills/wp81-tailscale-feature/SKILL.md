@@ -19,6 +19,9 @@ test lo avrebbe difeso.
 - Ogni requisito del piano deve avere il suo test nel task che possiede il
   codice. Se non sai quale test proverebbe la funzione, la funzione non è
   ancora definita.
+- **L'esecuzione è inline, sempre**: chi scrive il piano lo esegue in questa
+  sessione (skill `executing-plans`). Non si chiede quale metodo usare: il
+  piano non si chiude con una domanda, si chiude con i suoi commit.
 
 ## 2. Il test prima (rosso)
 
