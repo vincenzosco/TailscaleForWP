@@ -44,12 +44,15 @@ namespace Tailscale.Core.Control
         private Http2Connection _http2;
         private bool _broken;
 
+        /// <summary>Vero quando a chiudere il canale e' stata la scadenza di una richiesta.</summary>
+        private bool _deadlineHit;
+
         public NoiseControlConnection(NoiseTransport transport, ILogSink log)
         {
             if (transport == null) throw new ArgumentNullException("transport");
             _transport = transport;
             _log = log ?? NullLogSink.Instance;
-            _frames = new NoiseFrameStream(transport, 0);
+            _frames = new NoiseFrameStream(transport);
             _stream = new PushbackStream(_frames);
         }
 
@@ -72,7 +75,25 @@ namespace Tailscale.Core.Control
             return _http2;
         }
 
-        public ControlResponse Post(string path, string jsonBody, List<KeyValuePair<string, string>> headers)
+        public ControlResponse Post(string path, string jsonBody,
+                                    List<KeyValuePair<string, string>> headers, int deadlineSeconds)
+        {
+            _deadlineHit = false;
+            if (deadlineSeconds <= 0) return PostOnce(path, jsonBody, headers);
+
+            // La scadenza copre tutta la richiesta: dall'invio alla risposta letta.
+            // Scaduta, il canale viene chiuso: e' l'unico modo di sbloccare una
+            // lettura WinRT gia' in corso, e chi legge riceve un ControlTimeoutException.
+            using (Watchdog deadline = new Watchdog(this, deadlineSeconds,
+                                                    "la richiesta " + path, false))
+            {
+                return PostOnce(path, jsonBody, headers);
+            }
+        }
+
+        /// <summary>La richiesta senza scadenza: una sola andata e ritorno.</summary>
+        private ControlResponse PostOnce(string path, string jsonBody,
+                                         List<KeyValuePair<string, string>> headers)
         {
             // UTF-8, non ASCII: un hostname con accenti altrimenti diventa '?' e il
             // server vede un altro dispositivo senza che nulla lo segnali.
@@ -162,9 +183,7 @@ namespace Tailscale.Core.Control
             }
 
             Stream stream = response.Body;
-            int messages = 0;
-
-            using (Watchdog watchdog = new Watchdog(this, watchdogSeconds))
+            int messages = 0;                using (Watchdog watchdog = new Watchdog(this, watchdogSeconds, "la netmap", true))
             {
                 while (true)
                 {
@@ -267,6 +286,16 @@ namespace Tailscale.Core.Control
         {
             _broken = true;
             _log.Log("canale di controllo: " + what + " interrotta (" + ex.Message + ")");
+
+            // Chi ha chiesto la richiesta deve poter distinguere "la mia scadenza e'
+            // passata" da "la connessione e' caduta": sono due decisioni diverse.
+            if (_deadlineHit)
+            {
+                return new ControlTimeoutException(
+                    "canale di controllo interrotto durante " + what
+                    + ": la richiesta non ha ricevuto risposta entro la scadenza", ex);
+            }
+
             return new ControlStreamException(
                 "canale di controllo interrotto durante " + what
                 + ": la connessione e' caduta o il sistema ha interrotto la lettura", ex);
@@ -296,14 +325,23 @@ namespace Tailscale.Core.Control
             private readonly NoiseControlConnection _owner;
             private readonly Timer _timer;
             private readonly int _timeoutMs;
+            private readonly string _what;
+            private readonly bool _keepAlive;
             private DateTime _lastAliveUtc = DateTime.UtcNow;
             private bool _fired;
 
-            public Watchdog(NoiseControlConnection owner, int timeoutSeconds)
+            /// <summary>
+            /// Con `keepAlive` il controllo si ripete e l'attivita' lo rimanda (uno
+            /// stream che manda dati non va chiuso). Senza, e' una scadenza: un colpo
+            /// solo, e scade comunque, perche' non c'e' attivita' da guardare.
+            /// </summary>
+            public Watchdog(NoiseControlConnection owner, int timeoutSeconds, string what, bool keepAlive)
             {
                 _owner = owner;
+                _what = what;
+                _keepAlive = keepAlive;
                 _timeoutMs = timeoutSeconds * 1000;
-                _timer = new Timer(Check, null, _timeoutMs, _timeoutMs);
+                _timer = new Timer(Check, null, _timeoutMs, keepAlive ? _timeoutMs : Timeout.Infinite);
             }
 
             public void KeepAlive()
@@ -314,11 +352,12 @@ namespace Tailscale.Core.Control
             private void Check(object state)
             {
                 if (_fired) return;
-                if ((DateTime.UtcNow - _lastAliveUtc).TotalMilliseconds < _timeoutMs) return;
+                if (_keepAlive && (DateTime.UtcNow - _lastAliveUtc).TotalMilliseconds < _timeoutMs) return;
 
                 _fired = true;
-                _owner._log.Log("nessun dato dal control server per " + (_timeoutMs / 1000)
-                                + "s: chiudo lo stream");
+                _owner._deadlineHit = true;
+                _owner._log.Log("canale di controllo: " + _what + ": nessun dato per "
+                                + (_timeoutMs / 1000) + "s, chiudo il canale");
                 try { _owner.Dispose(); }
                 catch (Exception) { }
             }
@@ -349,6 +388,16 @@ namespace Tailscale.Core.Control
             try { _transport.Dispose(); }
             catch (Exception ex) { _log.Log("canale di controllo: errore in chiusura: " + ex.Message); }
         }
+    }
+
+    /// <summary>
+    /// La scadenza di una richiesta e' passata senza risposta: e' diverso da un
+    /// socket morto, e chi ha chiesto la richiesta deve poterlo distinguere (una
+    /// followup scaduta e' la fine della finestra di login, non un guasto di rete).
+    /// </summary>
+    public class ControlTimeoutException : ControlStreamException
+    {
+        public ControlTimeoutException(string message, Exception inner) : base(message, inner) { }
     }
 
     /// <summary>Errore nello stream della netmap o nel canale di controllo.</summary>

@@ -689,7 +689,8 @@ namespace Tailscale.Core.Tests
             public ScriptedConnection(Script script) { _script = script; }
 
             public ControlResponse Post(string path, string jsonBody,
-                                        List<KeyValuePair<string, string>> headers)
+                                        List<KeyValuePair<string, string>> headers,
+                                        int deadlineSeconds)
             {
                 return _script.Next(jsonBody);
             }
@@ -731,7 +732,8 @@ namespace Tailscale.Core.Tests
             public void Attach(ControlClient client) { _client = client; }
 
             public ControlResponse Post(string path, string jsonBody,
-                                       List<KeyValuePair<string, string>> headers)
+                                       List<KeyValuePair<string, string>> headers,
+                                       int deadlineSeconds)
             {
                 Calls++;
                 if (FailuresRemaining > 0)
@@ -769,7 +771,8 @@ namespace Tailscale.Core.Tests
             public AlternatingConnection(string body) { _body = body; }
 
             public ControlResponse Post(string path, string jsonBody,
-                                       List<KeyValuePair<string, string>> headers)
+                                       List<KeyValuePair<string, string>> headers,
+                                       int deadlineSeconds)
             {
                 Calls++;
                 if (Calls % 2 == 1)
@@ -805,7 +808,8 @@ namespace Tailscale.Core.Tests
             public bool Broken;
 
             public ControlResponse Post(string path, string jsonBody,
-                                        List<KeyValuePair<string, string>> headers)
+                                        List<KeyValuePair<string, string>> headers,
+                                        int deadlineSeconds)
             {
                 RegisterCalls++;
                 LastRegisterBody = jsonBody;

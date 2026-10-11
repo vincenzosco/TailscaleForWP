@@ -71,7 +71,14 @@ namespace Tailscale.Core.Control
     /// </summary>
     public interface IControlConnection : IDisposable
     {
-        ControlResponse Post(string path, string jsonBody, List<KeyValuePair<string, string>> headers);
+        /// <summary>
+        /// Una richiesta e la sua risposta. `deadlineSeconds` e' la scadenza che chi
+        /// chiama concede alla risposta (`0` o negativo: nessuna scadenza): senza,
+        /// un server che non risponde e non chiude il socket lascia il client
+        /// appeso per sempre, senza eccezione e senza riga di registro.
+        /// </summary>
+        ControlResponse Post(string path, string jsonBody, List<KeyValuePair<string, string>> headers,
+                             int deadlineSeconds);
 
         /// <summary>
         /// Apre uno stream e chiama onJson per ogni valore JSON che arriva: e' come
@@ -495,7 +502,8 @@ namespace Tailscale.Core.Control
                     // guasto _connection e' null, e un dial che fallisce e' anch'esso
                     // passeggero.
                     EnsureConnection();
-                    response = _connection.Post(ProtocolConstants.RegisterPath, body, headers);
+                    // TEMPORANEO: la scadenza del client arriva nel Task 2; 0 = come oggi.
+                    response = _connection.Post(ProtocolConstants.RegisterPath, body, headers, 0);
                 }
                 catch (ControlStreamException ex)
                 {

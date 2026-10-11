@@ -19,19 +19,16 @@ namespace Tailscale.Core.Control
         private readonly NoiseTransport _transport;
         private byte[] _pending = new byte[0];
         private int _position;
-        private readonly int _readTimeoutMs;
-        private DateTime _lastActivityUtc;
 
-        public NoiseFrameStream(NoiseTransport transport, int readTimeoutMs)
+        // Nessuna scadenza qui: una lettura bloccata su questo stream non si puo'
+        // interrompere da dentro, e un tempo limite che nessuno usa fa credere che
+        // una scadenza ci sia. La scadenza vive dove si puo' chiudere il canale:
+        // NoiseControlConnection.
+        public NoiseFrameStream(NoiseTransport transport)
         {
             if (transport == null) throw new ArgumentNullException("transport");
             _transport = transport;
-            _readTimeoutMs = readTimeoutMs;
-            _lastActivityUtc = DateTime.UtcNow;
         }
-
-        /// <summary>Ultimo istante in cui e' arrivato un frame: lo usa il watchdog.</summary>
-        public DateTime LastActivityUtc { get { return _lastActivityUtc; } }
 
         public override bool CanRead { get { return true; } }
         public override bool CanSeek { get { return false; } }
@@ -55,7 +52,6 @@ namespace Tailscale.Core.Control
             {
                 _pending = _transport.ReadFrame();
                 _position = 0;
-                _lastActivityUtc = DateTime.UtcNow;
             }
 
             int available = Math.Min(count, _pending.Length - _position);
