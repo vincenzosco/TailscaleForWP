@@ -31,6 +31,9 @@ namespace Tailscale.Core.Tests
             Run("canale di controllo", ControlChannelOrderTests.Run);
             Run("key material", KeyMaterialTests.Run);
             Run("file state store", FileStateStoreTests.Run);
+            Run("random source", RandomSourceCheckTests.Run);
+            Run("key vault", KeyVaultTests.Run);
+            Run("log file", TextFileLogTests.Run);
 
             Console.WriteLine(T.Failures == 0 ? "ALL PASS" : "FAILURES: " + T.Failures);
             return T.Failures;

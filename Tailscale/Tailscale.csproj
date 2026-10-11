@@ -92,6 +92,7 @@
     -->
     <Compile Include="Services\PhonePlatform.cs" />
     <Compile Include="Services\PhoneStores.cs" />
+    <Compile Include="Services\PhoneLogFile.cs" />
     <Compile Include="Services\EngineService.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
