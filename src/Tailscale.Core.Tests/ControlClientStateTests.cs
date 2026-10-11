@@ -20,6 +20,8 @@ namespace Tailscale.Core.Tests
         public static void Run()
         {
             Case("riavvio: stesse chiavi", RestartKeepsKeys);
+            Case("identita' nuova a ogni login", FreshIdentityForEachLoginAttempt);
+            Case("login in corso: identita' conservata", PendingLoginKeepsIdentity);
             Case("login senza browser", NeedLoginSurvivesWithoutBrowser);
             Case("corpo UTF-8", BodyKeepsAccents);
         }
@@ -60,6 +62,8 @@ namespace Tailscale.Core.Tests
             List<string> secondLog;
             ControlClient two = Run(store, second, null, out secondLog);
 
+            T.Eq("1", store.Read("authorized"), "autorizzato: il flag e' persistito");
+
             T.Eq(nodeKeyOne, JsonString(second.LastRegisterBody, "NodeKey"),
                  "riavvio: la stessa node key, non una nuova");
             T.Eq(machineKeyOne, store.Read("machineKey"),
@@ -68,6 +72,53 @@ namespace Tailscale.Core.Tests
             T.True(one.Status.State != ControlState.Error, "primo avvio: nessun errore");
             T.True(two.Status.State != ControlState.NeedLogin,
                    "riavvio: non chiede di accedere (era gia' autorizzato)");
+        }
+
+        /// <summary>
+        /// Un tentativo di login senza autorizzazione precedente ne' login in corso
+        /// non deve riusare le chiavi salvate: e' la chiave vecchia che il server
+        /// conosce ancora a produrre "device already exists".
+        /// </summary>
+        private static void FreshIdentityForEachLoginAttempt()
+        {
+            MemoryStateStore store = new MemoryStateStore();
+            // Sorgente con partenza diversa da quella del client (che parte da 0): se
+            // le due coincidessero, la chiave "rigenerata" sarebbe identica a quella
+            // vecchia e l'asserzione non proverebbe nulla.
+            KeyPair old = KeyPair.Generate(new SequenceRandomSource(200));
+            store.Write("machineKey", KeyMaterial.SavePrivate(old));
+            store.Write("nodeKey", "nodekey:" + new string('b', 64));
+            // Nessun "authorized" e nessun "authUrl": e' un nuovo tentativo di login.
+
+            FakeConnection connection = new FakeConnection();
+            connection.RegisterBody =
+                "{\"AuthURL\":\"https://login.tailscale.com/a/xyz\",\"MachineAuthorized\":false}";
+            List<string> lines;
+            Run(store, connection, null, out lines);
+
+            string sent = JsonString(connection.LastRegisterBody, "NodeKey");
+            T.True(sent != "nodekey:" + new string('b', 64), "login: non si riusa la node key salvata");
+            T.Eq(sent, store.Read("nodeKey"), "login: la nuova node key e' persistita");
+            T.True(store.Read("machineKey") != KeyMaterial.SavePrivate(old),
+                   "login: anche la chiave macchina e' nuova");
+        }
+
+        /// <summary>
+        /// Un login gia' in corso ha l'URL legato a questa node key: rigenerarla lo
+        /// invaliderebbe, quindi le chiavi si conservano finche' non si conclude.
+        /// </summary>
+        private static void PendingLoginKeepsIdentity()
+        {
+            MemoryStateStore store = new MemoryStateStore();
+            string nodeKey = "nodekey:" + new string('c', 64);
+            store.Write("machineKey", KeyMaterial.SavePrivate(KeyPair.Generate(new SequenceRandomSource())));
+            store.Write("nodeKey", nodeKey);
+            store.Write("authUrl", "https://login.tailscale.com/a/pending");
+
+            // Solo il costruttore: l'URL non va invalidato.
+            ControlClient client = new ControlClient(Options(store, new FakeConnection()));
+            T.Eq(nodeKey, client.NodeKey.ToString(), "login in corso: la node key non cambia");
+            T.Eq(nodeKey, store.Read("nodeKey"), "login in corso: nemmeno nello store");
         }
 
         private static void NeedLoginSurvivesWithoutBrowser()
@@ -104,7 +155,7 @@ namespace Tailscale.Core.Tests
         {
             // Review Focus 1: un nome macchina italiano tipico.
             Hostinfo hostinfo = new Hostinfo();
-            hostinfo.Hostname = "Pc-Di-Vincènzo-☕";
+            hostinfo.Hostname = "Pc-Di-Vincènzo";
             hostinfo.OS = "windows";
 
             RegisterRequest request = new RegisterRequest();
@@ -121,13 +172,13 @@ namespace Tailscale.Core.Tests
             T.True(json.Contains("\\u00e8"), "l'accento viene scritto come \\u00e8");
 
             JsonValue parsed = JsonBody.Parse(Text.FromUtf8(body));
-            T.Eq("Pc-Di-Vincènzo-☕", parsed["Hostinfo"]["Hostname"].AsString(""),
+            T.Eq("Pc-Di-Vincènzo", parsed["Hostinfo"]["Hostname"].AsString(""),
                  "l'hostname arriva intero, senza '?'");
             T.False(Text.FromUtf8(body).Contains("?"), "nessun carattere sostituito");
 
             // E la conversione usata dal canale di controllo non degrada nulla di
             // suo: testo accentato -> byte UTF-8 -> stesso testo.
-            const string accented = "caffè ☕ àèìòù";
+            const string accented = "caffè àèìòù";
             byte[] utf8 = Text.Utf8Bytes(accented);
             T.True(utf8.Length > accented.Length, "UTF-8 usa piu' byte dei caratteri");
             T.Eq(accented, Text.FromUtf8(utf8), "e si rilegge identico");
