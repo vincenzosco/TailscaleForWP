@@ -520,6 +520,11 @@ namespace Tailscale.Core.Control
                     continue;
                 }
 
+                // Il canale ha risposto: i guasti di prima erano davvero passeggeri e il
+                // budget riparte da zero. Il tetto conta cosi' i guasti *consecutivi*,
+                // non tutti quelli capitati mentre l'utente stava accedendo nel browser.
+                _channelRetries = 0;
+
                 _options.Log.Log("registrazione: risposta http " + response.StatusCode
                                  + ", " + (response.Body == null ? 0 : response.Body.Length) + " byte");
 
