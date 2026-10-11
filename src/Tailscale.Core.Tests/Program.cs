@@ -34,6 +34,7 @@ namespace Tailscale.Core.Tests
             Run("random source", RandomSourceCheckTests.Run);
             Run("key vault", KeyVaultTests.Run);
             Run("log file", TextFileLogTests.Run);
+            Run("ciclo del motore", EngineRunStateTests.Run);
 
             Console.WriteLine(T.Failures == 0 ? "ALL PASS" : "FAILURES: " + T.Failures);
             return T.Failures;
