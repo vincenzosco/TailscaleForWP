@@ -1,0 +1,12 @@
+docs/
+# progetto
+bin/
+obj/
+*.suo
+*.user
+*.log
+refs/
+
+# output del provisioning (contiene configurazione)
+provisioning/out/
+provisioning/backup-*.txt
