@@ -34,6 +34,7 @@ namespace Tailscale.Core.Tests
             Case("canale interrotto sempre: si smette con un errore", RegisterGivesUpAfterTheBudget);
             Case("arresto durante la registrazione: non e' un errore", StoppingIsNotAnError);
             Case("riavvio dopo l'arresto: si registra di nuovo", RestartAfterStopRegistersAgain);
+            Case("tetto dei guasti: solo quelli consecutivi", ChannelFailureBudgetCountsConsecutiveFailures);
         }
 
         private static void Case(string name, Action test)
@@ -420,6 +421,37 @@ namespace Tailscale.Core.Tests
             T.True(client.Status.State != ControlState.Error, "riavvio: nessun errore");
         }
 
+        /// <summary>
+        /// Il tetto conta i guasti *consecutivi*. Un canale instabile -- un guasto
+        /// ogni tanto mentre l'utente sta ancora accedendo nel browser -- non deve
+        /// esaurire il budget e diventare un errore definitivo: la registrazione e'
+        /// riuscita, il canale funziona, e l'ora di pazienza del login non e' finita.
+        /// </summary>
+        private static void ChannelFailureBudgetCountsConsecutiveFailures()
+        {
+            MemoryStateStore store = new MemoryStateStore();
+            AlternatingConnection connection = new AlternatingConnection(
+                "{\"AuthURL\":\"https://login.tailscale.com/a/xyz\",\"MachineAuthorized\":false}");
+
+            List<string> captured = new List<string>();
+            ControlClientOptions options = Options(store, new FakeConnection());
+            options.Log = new DelegateLogSink(captured.Add);
+            options.MaxChannelRetries = 1;
+            options.LoginTimeoutSeconds = 6;
+            options.LoginPollMilliseconds = 1000;
+            options.ConnectionFactory = delegate() { return connection; };
+            options.Sleep = delegate(int milliseconds) { };
+
+            ControlClient client = new ControlClient(options);
+            client.Start();
+
+            T.True(connection.Failures >= 2, "tetto: il canale fallisce piu' di una volta");
+            T.False(HasLine(captured, "canale di controllo non disponibile"),
+                    "tetto: guasti non consecutivi non esauriscono il budget");
+            T.Eq(ControlState.NeedLogin.ToString(), client.Status.State.ToString(),
+                 "tetto: il login resta in corso invece di finire in errore");
+        }
+
         /// <summary>La risposta esatta con cui il control server rifiuta una node key ancora nota.</summary>
         private static string DuplicateError()
         {
@@ -707,6 +739,43 @@ namespace Tailscale.Core.Tests
                     FailuresRemaining--;
                     if (Stopper && _client != null) _client.Stop();
                     throw new ControlStreamException(Interrupted, new IOException(Interrupted));
+                }
+
+                ControlResponse response = new ControlResponse();
+                response.StatusCode = 200;
+                response.Body = _body;
+                return response;
+            }
+
+            public void PostStream(string path, string jsonBody,
+                                   List<KeyValuePair<string, string>> headers,
+                                   Action<string> onJson, int watchdogSeconds)
+            {
+            }
+
+            public bool IsBroken { get { return false; } }
+
+            public void Dispose() { }
+        }
+
+        /// <summary>Fallisce una volta si' e una no: un canale instabile, non un canale morto.</summary>
+        private sealed class AlternatingConnection : IControlConnection
+        {
+            private readonly string _body;
+
+            public int Calls;
+            public int Failures;
+
+            public AlternatingConnection(string body) { _body = body; }
+
+            public ControlResponse Post(string path, string jsonBody,
+                                       List<KeyValuePair<string, string>> headers)
+            {
+                Calls++;
+                if (Calls % 2 == 1)
+                {
+                    Failures++;
+                    throw new ControlStreamException(FlakyConnection.Interrupted);
                 }
 
                 ControlResponse response = new ControlResponse();
