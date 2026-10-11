@@ -85,12 +85,10 @@ namespace Tailscale.Core.Control
             {
                 response = Http2().Post(path, body, headers);
             }
-            catch (IOException ex)
+            catch (Exception ex)
             {
-                _log.Log("http: " + path + " interrotta (" + ex.Message + ")");
-                throw new ControlStreamException(
-                    "richiesta " + path + " interrotta: il control server ha chiuso la connessione ("
-                    + ex.Message + ")", ex);
+                if (!IsChannelFailure(ex)) throw;
+                throw ChannelFailure("la richiesta " + path, ex);
             }
 
             string text;
@@ -98,11 +96,10 @@ namespace Tailscale.Core.Control
             {
                 text = Http2Connection.ReadBody(response.Body, MaxBodyBytes);
             }
-            catch (Http2Exception ex)
+            catch (Exception ex)
             {
-                _log.Log("http: " + path + " -> " + response.StatusCode + ", corpo non leggibile: " + ex.Message);
-                throw new ControlStreamException("corpo della risposta di " + path + " non leggibile: "
-                    + ex.Message, ex);
+                if (!IsChannelFailure(ex)) throw;
+                throw ChannelFailure("la lettura del corpo di " + path, ex);
             }
 
             _log.Log("http: " + path + " -> " + response.StatusCode + ", "
@@ -132,13 +129,33 @@ namespace Tailscale.Core.Control
             _log.Log("map: apro lo stream su " + path + " (watchdog " + watchdogSeconds
                      + "s, " + body.Length + " byte di richiesta)");
 
-            Http2Response response = Http2().Post(path, body, headers);
+            Http2Response response;
+            try
+            {
+                response = Http2().Post(path, body, headers);
+            }
+            catch (Exception ex)
+            {
+                if (!IsChannelFailure(ex)) throw;
+                throw ChannelFailure("la richiesta " + path, ex);
+            }
+
             _log.Log("map: risposta http " + response.StatusCode + ", content-type="
                      + (response.ContentType ?? "assente"));
 
             if (response.StatusCode != 200)
             {
-                string error = Http2Connection.ReadBody(response.Body, MaxBodyBytes);
+                string error;
+                try
+                {
+                    error = Http2Connection.ReadBody(response.Body, MaxBodyBytes);
+                }
+                catch (Exception ex)
+                {
+                    if (!IsChannelFailure(ex)) throw;
+                    throw ChannelFailure("la lettura del corpo di " + path, ex);
+                }
+
                 _log.Log("map: rifiutata, corpo = " + Short(error));
                 throw new ControlStreamException("map rifiutata: http " + response.StatusCode
                     + " " + Short(error));
@@ -151,38 +168,108 @@ namespace Tailscale.Core.Control
             {
                 while (true)
                 {
-                    byte[] size = new byte[4];
-                    if (!ReadExactly(stream, size, 4))
-                    {
-                        _log.Log("map: lo stream si e' chiuso dopo " + messages + " messaggi");
-                        break;
-                    }
-
-                    // Little-endian: e' il byte order che sceglie il control server.
-                    long length = (uint)(size[0] | (size[1] << 8) | (size[2] << 16) | (size[3] << 24));
-                    if (length > MaxMapMessageBytes)
-                    {
-                        _log.Log("map: messaggio di " + length + " byte, oltre il tetto di "
-                                 + MaxMapMessageBytes);
-                        throw new ControlStreamException("messaggio della netmap di " + length
-                            + " byte: oltre il massimo accettato di " + MaxMapMessageBytes);
-                    }
-
-                    byte[] message = new byte[(int)length];
-                    if (!ReadExactly(stream, message, message.Length))
-                        throw new ControlStreamException("messaggio della netmap troncato: attesi "
-                            + length + " byte");
+                    byte[] message = ReadMapMessage(stream, messages);
+                    if (message == null) break;
 
                     watchdog.KeepAlive();
                     messages++;
 
                     // UTF-8: i messaggi sono JSON, e un nome di peer con accenti
                     // sono due byte per carattere.
+                    //
+                    // L'ultimo passo resta fuori dalla lettura protetta: un errore
+                    // del chiamante sui dati non e' un guasto del canale, e non deve
+                    // sembrare tale.
                     onJson(Text.FromUtf8(message));
                 }
             }
 
             _log.Log("stream della netmap terminato (" + messages + " messaggi)");
+        }
+
+        /// <summary>
+        /// Legge un messaggio della netmap. Restituisce null quando lo stream si e'
+        /// chiuso fra due messaggi (fine normale), e traduce ogni guasto di lettura
+        /// in un guasto di canale, perche' chi legge possa rifarlo.
+        /// </summary>
+        private byte[] ReadMapMessage(Stream stream, int messages)
+        {
+            byte[] size = new byte[4];
+            bool started;
+            try
+            {
+                started = ReadExactly(stream, size, 4);
+            }
+            catch (Exception ex)
+            {
+                if (!IsChannelFailure(ex)) throw;
+                throw ChannelFailure("la netmap", ex);
+            }
+
+            if (!started)
+            {
+                _log.Log("map: lo stream si e' chiuso dopo " + messages + " messaggi");
+                return null;
+            }
+
+            // Little-endian: e' il byte order che sceglie il control server.
+            long length = (uint)(size[0] | (size[1] << 8) | (size[2] << 16) | (size[3] << 24));
+            if (length > MaxMapMessageBytes)
+            {
+                // Il messaggio non viene consumato: il framing e' fuori sincrono e
+                // la connessione non e' piu' utilizzabile.
+                _broken = true;
+                _log.Log("map: messaggio di " + length + " byte, oltre il tetto di "
+                         + MaxMapMessageBytes);
+                throw new ControlStreamException("messaggio della netmap di " + length
+                    + " byte: oltre il massimo accettato di " + MaxMapMessageBytes);
+            }
+
+            byte[] message = new byte[(int)length];
+            bool whole;
+            try
+            {
+                whole = ReadExactly(stream, message, message.Length);
+            }
+            catch (Exception ex)
+            {
+                if (!IsChannelFailure(ex)) throw;
+                throw ChannelFailure("la netmap", ex);
+            }
+
+            if (!whole)
+            {
+                _broken = true;
+                throw new ControlStreamException("messaggio della netmap troncato: attesi "
+                    + length + " byte");
+            }
+
+            return message;
+        }
+
+        /// <summary>
+        /// Un errore di I/O sul canale: la connessione e' caduta, il socket e' stato
+        /// chiuso, o il sistema ha interrotto la lettura (e' il caso di un'app
+        /// sospesa con una lettura in volo). Un errore di *dati* -- un JSON
+        /// illeggibile, una risposta non-200 -- non appartiene a questa famiglia.
+        /// </summary>
+        private static bool IsChannelFailure(Exception ex)
+        {
+            return ex is Http2Exception || ex is IOException || ex is ObjectDisposedException;
+        }
+
+        /// <summary>
+        /// Dichiara rotto il canale e restituisce l'errore da propagare. Chi lo
+        /// riceve sa che il canale va rifatto, e il registro dice cosa e' successo
+        /// senza costringere a leggere un HRESULT.
+        /// </summary>
+        private ControlStreamException ChannelFailure(string what, Exception ex)
+        {
+            _broken = true;
+            _log.Log("canale di controllo: " + what + " interrotta (" + ex.Message + ")");
+            return new ControlStreamException(
+                "canale di controllo interrotto durante " + what
+                + ": la connessione e' caduta o il sistema ha interrotto la lettura", ex);
         }
 
         /// <summary>Legge esattamente count byte; false se lo stream finisce prima di iniziare.</summary>

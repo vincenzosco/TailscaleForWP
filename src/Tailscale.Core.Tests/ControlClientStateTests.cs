@@ -28,6 +28,7 @@ namespace Tailscale.Core.Tests
             Case("errore duplicato: recupero", RecoversFromDuplicateIdentityError);
             Case("errore duplicato su non-200", RecoversFromDuplicateOnNonSuccess);
             Case("errore duplicato ripetuto: stop", StopsAfterOneDuplicateRefresh);
+            Case("canale rotto: non si riusa", BrokenChannelIsNotReused);
         }
 
         private static void Case(string name, Action test)
@@ -281,6 +282,31 @@ namespace Tailscale.Core.Tests
                  "duplicato ripetuto: l'errore viene mostrato invece di ciclare");
         }
 
+        /// <summary>
+        /// Un canale che ha dichiarato un guasto non va piu' usato: e' l'anello da
+        /// cui dipende tutto il recupero. Se IsBroken non arrivasse al client, ogni
+        /// riconnessione riuserebbe il canale morto e l'app resterebbe ferma sulla
+        /// schermata vecchia senza che nulla lo dica.
+        /// </summary>
+        private static void BrokenChannelIsNotReused()
+        {
+            MemoryStateStore store = new MemoryStateStore();
+            FakeConnection dead = new FakeConnection();
+            dead.Broken = true;
+            dead.RegisterBody = AuthorizedResponse();
+            FakeConnection good = new FakeConnection();
+            good.RegisterBody = AuthorizedResponse();
+
+            List<string> lines;
+            RunChannelSwap(store, dead, good, out lines);
+
+            T.Eq(1, dead.RegisterCalls, "canale rotto: il primo avvio usa il canale che c'e'");
+            T.True(good.RegisterCalls >= 1,
+                   "canale rotto: al riavvio il canale viene rifatto invece di essere riusato");
+            T.True(HasLine(lines, "la connessione e' segnata rotta"),
+                   "canale rotto: il registro dice perche' il canale e' stato rifatto");
+        }
+
         /// <summary>La risposta esatta con cui il control server rifiuta una node key ancora nota.</summary>
         private static string DuplicateError()
         {
@@ -327,6 +353,45 @@ namespace Tailscale.Core.Tests
             ControlClient client = new ControlClient(options);
             holder[0] = client;
             client.Start();
+            return client;
+        }
+
+        /// <summary>
+        /// Avvia il client, lo ferma e lo riavvia su un canale nuovo: e' la forma
+        /// minima della ripresa dopo che una lettura e' fallita. Il registro dice
+        /// anche *perche'* il canale e' stato rifatto.
+        /// </summary>
+        private static ControlClient RunChannelSwap(IStateStore store, IControlConnection first,
+                                                    IControlConnection second, out List<string> lines)
+        {
+            List<string> captured = new List<string>();
+            ControlClientOptions options = Options(store, new FakeConnection());
+            options.Log = new DelegateLogSink(captured.Add);
+
+            int created = 0;
+            options.ConnectionFactory = delegate()
+            {
+                created++;
+                return created == 1 ? first : second;
+            };
+
+            ControlClient[] holder = new ControlClient[1];
+            int sleeps = 0;
+            options.Sleep = delegate(int milliseconds)
+            {
+                sleeps++;
+                if (sleeps > 2 && holder[0] != null) holder[0].Stop();
+            };
+
+            ControlClient client = new ControlClient(options);
+            holder[0] = client;
+            client.Start();
+
+            // Il riavvio ha di nuovo il suo margine di attese.
+            sleeps = 0;
+            client.Start();
+
+            lines = captured;
             return client;
         }
 
@@ -459,6 +524,9 @@ namespace Tailscale.Core.Tests
             public int RegisterCalls;
             public string LastRegisterBody;
 
+            /// <summary>Vero quando il canale ha gia' fallito: il client non deve riusarlo.</summary>
+            public bool Broken;
+
             public ControlResponse Post(string path, string jsonBody,
                                         List<KeyValuePair<string, string>> headers)
             {
@@ -476,7 +544,7 @@ namespace Tailscale.Core.Tests
             {
             }
 
-            public bool IsBroken { get { return false; } }
+            public bool IsBroken { get { return Broken; } }
 
             public void Dispose() { }
         }
