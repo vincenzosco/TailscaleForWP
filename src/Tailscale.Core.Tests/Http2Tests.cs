@@ -31,6 +31,143 @@ namespace Tailscale.Core.Tests
             Case("finestra", SendsAckWindowUpdatesAndPing);
             Case("goaway", GoAwayIsAnError);
             Case("frame troppo grande", RejectsOversizedFrame);
+            Case("early payload dopo la prefazione", EarlyPayloadComesAfterThePreface);
+            Case("corpo utf8", ReadsUtf8Body);
+            Case("max frame size zero", IgnoresAnUnusableMaxFrameSize);
+            Case("padding e priorita'", ReadsHeadersWithPaddingAndPriority);
+        }
+
+        /// <summary>
+        /// L'early payload e' opzionale: un server che non lo manda non manda nulla
+        /// finche' non ha visto la prefazione HTTP/2. La lettura dei 9 byte di testa
+        /// deve quindi avvenire *dopo* aver scritto, altrimenti il client resta
+        /// appeso per sempre. Qui si fissa l'ordine osservando lo stream: prima
+        /// scrittura, poi lettura.
+        /// </summary>
+        private static void EarlyPayloadComesAfterThePreface()
+        {
+            ScriptedStream raw = new ScriptedStream();
+            raw.Script(ServerSettings());
+            raw.Script(ResponseHeaders(0x4, ":status", "200", "content-type", "application/json"));
+            raw.Script(Data("ok", true));
+
+            List<string> lines = new List<string>();
+            Http2Connection connection = new Http2Connection(
+                new PushbackStream(raw), new DelegateLogSink(lines.Add));
+            Http2Response response = connection.Post("/machine/register", T.FromHex("7b7d"),
+                new List<KeyValuePair<string, string>>());
+
+            T.Eq(200, response.StatusCode, "ordine: la risposta arriva comunque");
+            T.True(raw.AnyRead, "ordine: il client ha letto una risposta");
+            T.False(raw.ReadBeforeWrite, "ordine: nessuna lettura prima della prefazione");
+            T.Eq(Preface, AsciiOf(raw.Written.ToArray(), 0, 24), "ordine: prefazione scritta per prima");
+        }
+
+        /// <summary>
+        /// Un corpo di risposta e' UTF-8: leggendo un byte per carattere, un nome
+        /// con accenti diventerebbe una sequenza di caratteri sbagliati.
+        /// </summary>
+        private static void ReadsUtf8Body()
+        {
+            string expected = "Pc-Di-Vinc\u00e8nzo";
+            byte[] utf8 = new byte[0];
+            for (int i = 0; i < expected.Length; i++) utf8 = Push(utf8, Encoding.UTF8.GetBytes(expected.Substring(i, 1)));
+            T.True(utf8.Length > expected.Length, "utf8: l'accento occupa piu' di un byte");
+
+            ScriptedStream stream = new ScriptedStream();
+            stream.Script(ServerSettings());
+            stream.Script(ResponseHeaders(0x4, ":status", "200", "content-type", "application/json"));
+            stream.Script(DataBytes(utf8, false));
+            stream.Script(Data("", true));
+
+            Http2Connection connection = new Http2Connection(stream, NullLogSink.Instance);
+            Http2Response response = connection.Post("/machine/register", T.FromHex("7b7d"),
+                new List<KeyValuePair<string, string>>());
+            T.Eq(expected, Http2Connection.ReadBody(response.Body, 4096), "utf8: il corpo torna identico");
+        }
+
+        /// <summary>
+        /// Un MAX_FRAME_SIZE fuori range non deve essere usato: con 0 il ciclo che
+        /// spezza il corpo non avanzerebbe e la richiesta resterebbe in ciclo
+        /// infinito scrivendo frame vuoti.
+        /// </summary>
+        private static void IgnoresAnUnusableMaxFrameSize()
+        {
+            byte[] payload = new byte[6];
+            payload[1] = 5;    // MAX_FRAME_SIZE
+            // valore 0: fuori dal range ammesso (16384..16777215)
+
+            ScriptedStream stream = new ScriptedStream();
+            stream.Script(new Http2Frame(Http2FrameType.Settings, 0, 0, payload).ToBytes());
+            stream.Script(ResponseHeaders(0x4, ":status", "200", "content-type", "application/json"));
+            stream.Script(Data("", true));
+
+            byte[] body = new byte[20000];
+            List<string> lines = new List<string>();
+            Http2Connection connection = new Http2Connection(stream, new DelegateLogSink(lines.Add));
+            Http2Response response = connection.Post("/machine/register", body,
+                new List<KeyValuePair<string, string>>());
+            T.Eq(200, response.StatusCode, "max frame size: la richiesta si conclude");
+            T.True(HasLine(lines, "MAX_FRAME_SIZE fuori range"), "max frame size: il log dice che l'ho ignorato");
+
+            // E il corpo e' uscito comunque, spezzato sul valore di default.
+            int largest = 0;
+            foreach (Http2Frame frame in ParseWritten(stream, 24))
+            {
+                if (frame.Type == Http2FrameType.Data && frame.Payload.Length > largest)
+                    largest = frame.Payload.Length;
+            }
+            T.Eq(Http2Frame.DefaultMaxFrameSize, largest, "max frame size: si usa il default");
+        }
+
+        /// <summary>
+        /// RFC 9113 §6.2: con PADDED e PRIORITY insieme, il byte di lunghezza del
+        /// padding viene *prima* dei 5 byte di priorita'. Leggendo nell'ordine
+        /// sbagliato il blocco di header parte 5 byte spostato e la tabella HPACK
+        /// resta disallineata per il resto della connessione.
+        /// </summary>
+        private static void ReadsHeadersWithPaddingAndPriority()
+        {
+            List<HpackHeader> headers = new List<HpackHeader>();
+            headers.Add(new HpackHeader(":status", "200"));
+            headers.Add(new HpackHeader("content-type", "application/json"));
+            byte[] block = new HpackEncoder(true).Encode(headers);
+
+            const int padding = 7;
+            byte[] payload = new byte[1 + 5 + block.Length + padding];
+            payload[0] = padding;
+            // i 5 byte di priorita' restano a zero: esclusivo spento, dipendenza 0, peso 0
+            Array.Copy(block, 0, payload, 6, block.Length);
+
+            byte[] frame = new Http2Frame(Http2FrameType.Headers,
+                (byte)(Http2Frame.FlagPadded | Http2Frame.FlagPriority | Http2Frame.FlagEndHeaders),
+                1, payload).ToBytes();
+
+            ScriptedStream stream = new ScriptedStream();
+            stream.Script(ServerSettings());
+            stream.Script(frame);
+            stream.Script(Data("", true));
+
+            Http2Connection connection = new Http2Connection(stream, NullLogSink.Instance);
+            Http2Response response = connection.Post("/machine/map", T.FromHex("7b7d"),
+                new List<KeyValuePair<string, string>>());
+
+            T.Eq(200, response.StatusCode, "padding: lo stato si legge");
+            T.Eq("application/json", response.ContentType, "padding: gli header si leggono interi");
+        }
+
+        private static byte[] Push(byte[] current, byte[] more)
+        {
+            byte[] combined = new byte[current.Length + more.Length];
+            Array.Copy(current, 0, combined, 0, current.Length);
+            Array.Copy(more, 0, combined, current.Length, more.Length);
+            return combined;
+        }
+
+        private static byte[] DataBytes(byte[] payload, bool endStream)
+        {
+            return new Http2Frame(Http2FrameType.Data,
+                endStream ? Http2Frame.FlagEndStream : (byte)0, 1, payload).ToBytes();
         }
 
         /// <summary>
@@ -370,6 +507,15 @@ namespace Tailscale.Core.Tests
             public readonly List<byte> Written = new List<byte>();
             private readonly MemoryStream _incoming = new MemoryStream();
 
+            /// <summary>Vero appena lo stream viene letto la prima volta.</summary>
+            public bool AnyRead;
+
+            /// <summary>
+            /// Vero se la prima lettura e' avvenuta prima di qualsiasi scrittura:
+            /// e' l'ordine che non deve mai verificarsi sul canale di controllo.
+            /// </summary>
+            public bool ReadBeforeWrite;
+
             /// <summary>
             /// Accoda quello che il server manda, senza spostare il cursore di
             /// lettura: il client deve leggere i frame nell'ordine in cui sono
@@ -394,6 +540,11 @@ namespace Tailscale.Core.Tests
 
             public override int Read(byte[] buffer, int offset, int count)
             {
+                if (!AnyRead)
+                {
+                    AnyRead = true;
+                    ReadBeforeWrite = Written.Count == 0;
+                }
                 if (_incoming.Position >= _incoming.Length)
                     throw new EndOfStreamException("la sceneggiatura del server e' finita");
                 return _incoming.Read(buffer, offset, count);

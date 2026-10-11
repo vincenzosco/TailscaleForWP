@@ -38,7 +38,13 @@ namespace Tailscale.Core.Control
         public override bool CanWrite { get { return true; } }
         public override long Length { get { throw new NotSupportedException(); } }
         public override long Position { get { throw new NotSupportedException(); } set { throw new NotSupportedException(); } }
-        public override void Flush() { }
+
+        /// <summary>
+        /// Inoltra il flush al trasporto: i frame HTTP/2 vengono scritti uno per
+        /// volta e chi li scrive chiede il flush credendo che i byte escano da qui.
+        /// Un Flush vuoto rendeva quella richiesta decorativa.
+        /// </summary>
+        public override void Flush() { _transport.Flush(); }
         public override long Seek(long offset, SeekOrigin origin) { throw new NotSupportedException(); }
         public override void SetLength(long value) { throw new NotSupportedException(); }
 

@@ -8,7 +8,92 @@
     mc:Ignorable="d"
     Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
 
-    <Grid>
+    <Grid Margin="16,12,16,0">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
 
+        <!-- Riga 0: chi siamo e come stiamo. Il nome e lo stato li scrive il codice. -->
+        <StackPanel Grid.Row="0">
+            <!-- I due testi qui sotto li riempie il codice dalle risorse
+                 (Status_*), quindi non hanno x:Uid: sarebbe una seconda fonte
+                 di verita' per la stessa stringa. -->
+            <TextBlock x:Name="DeviceText"
+                       FontSize="22"
+                       TextWrapping="NoWrap" />
+            <TextBlock x:Name="StatusText"
+                       Margin="0,2,0,0"
+                       FontSize="16"
+                       Opacity="0.8"
+                       TextWrapping="Wrap" />
+        </StackPanel>
+
+        <!-- Riga 1: una sola azione principale, piu' il suggerimento che serve. -->
+        <StackPanel Grid.Row="1" Margin="0,12,0,0">
+            <Button x:Name="PrimaryButton"
+                    Click="OnPrimaryButtonClick"
+                    HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Center"
+                    FontSize="20" />
+            <TextBlock x:Name="LoginHint"
+                       x:Uid="LoginHint"
+                       Margin="0,8,0,0"
+                       FontSize="14"
+                       Opacity="0.8"
+                       Visibility="Collapsed"
+                       TextWrapping="Wrap" />
+            <TextBlock x:Name="NoBrowserHint"
+                       x:Uid="NoBrowserHint"
+                       Margin="0,4,0,0"
+                       FontSize="14"
+                       Opacity="0.8"
+                       Visibility="Collapsed"
+                       TextWrapping="Wrap" />
+        </StackPanel>
+
+        <!-- Riga 2: i dispositivi del tailnet. -->
+        <Grid Grid.Row="2" Margin="0,16,0,0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <TextBlock x:Name="PeersHeader"
+                       x:Uid="PeersHeader"
+                       Grid.Row="0"
+                       FontSize="16"
+                       FontWeight="SemiBold" />
+
+            <ListView x:Name="PeerList"
+                      Grid.Row="1"
+                      Margin="0,4,0,0">
+                <ListView.ItemTemplate>
+                    <DataTemplate>
+                        <StackPanel Margin="0,6,0,6">
+                            <TextBlock Text="{Binding Title}" FontSize="17" TextWrapping="NoWrap" />
+                            <TextBlock Text="{Binding Detail}" FontSize="13" Opacity="0.7" TextWrapping="NoWrap" />
+                        </StackPanel>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+        </Grid>
+
+        <!-- Riga 3: le ultime righe di registro, che sono la diagnosi quando
+             qualcosa non va e l'unica cosa che si puo' copiare da un telefono. -->
+        <StackPanel Grid.Row="3" Margin="0,8,0,8">
+            <TextBlock x:Name="LogHeader"
+                       x:Uid="LogHeader"
+                       FontSize="16"
+                       FontWeight="SemiBold" />
+            <ScrollViewer Height="150" Margin="0,4,0,0" VerticalScrollBarVisibility="Auto">
+                <TextBlock x:Name="LogText"
+                           FontSize="12"
+                           Opacity="0.8"
+                           TextWrapping="Wrap" />
+            </ScrollViewer>
+        </StackPanel>
     </Grid>
 </Page>

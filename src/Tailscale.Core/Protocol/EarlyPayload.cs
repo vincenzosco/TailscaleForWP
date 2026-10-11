@@ -77,7 +77,9 @@ namespace Tailscale.Core.Protocol
             if (!ReadAtLeast(stream, payload, length))
                 throw new Http2Exception("early payload troncato: attesi " + length + " byte di JSON");
 
-            json = Latin1(payload);
+            // Il payload e' JSON (tailcfg.EarlyNoise): UTF-8, non un byte per
+            // carattere.
+            json = Text.FromUtf8(payload);
             log.Log("early payload: " + length + " byte, contenuto = " + Preview(json));
             return true;
         }
@@ -101,13 +103,6 @@ namespace Tailscale.Core.Protocol
                 read += n;
             }
             return true;
-        }
-
-        private static string Latin1(byte[] bytes)
-        {
-            char[] chars = new char[bytes.Length];
-            for (int i = 0; i < bytes.Length; i++) chars[i] = (char)bytes[i];
-            return new string(chars);
         }
 
         private static string Preview(string text)
