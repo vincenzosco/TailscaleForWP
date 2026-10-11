@@ -159,6 +159,14 @@ namespace Tailscale.Core.Control
         private volatile bool _stopping;
         private int _generations;
 
+        /// <summary>
+        /// Quante volte, in questo avvio, l'identita' e' stata rigenerata perche' il
+        /// server l'ha rifiutata come gia' esistente. Un solo tentativo: se anche la
+        /// chiave nuova viene rifiutata, l'errore e' reale e va mostrato.
+        /// </summary>
+        private int _identityRefreshes;
+        private const int MaxIdentityRefreshes = 1;
+
         public ControlClient(ControlClientOptions options)
         {
             if (options == null) throw new ArgumentNullException("options");
@@ -398,6 +406,9 @@ namespace Tailscale.Core.Control
             // un 401 arrivato dopo il primo non ricaricherebbe piu' nulla e
             // resterebbe un errore definitivo anche quando basta rifare l'handshake.
             _reloadedKeys = false;
+            // Vale per questa connessione, non per la vita del processo: azzerato qui
+            // perche' un nuovo Start deve poter ritentare con un'identita' nuova.
+            _identityRefreshes = 0;
 
             try
             {
@@ -462,6 +473,14 @@ namespace Tailscale.Core.Control
 
                 if (!response.IsSuccess)
                 {
+                    // Il rifiuto puo' arrivare anche come corpo della risposta: se dice
+                    // che la node key e' gia' nota, l'unica via e' un'identita' nuova.
+                    if (RecoverFromDuplicateIdentity(response.Body))
+                    {
+                        EnsureConnection();
+                        continue;
+                    }
+
                     // Un 401 o un errore di decifratura puo' voler dire che il server ha
                     // ruotato le chiavi: si ricaricano e si riprova una volta sola.
                     if (ReloadServerKeysAndReconnect(response.StatusCode))
@@ -492,6 +511,13 @@ namespace Tailscale.Core.Control
 
                 if (parsed.Error.Length > 0)
                 {
+                    if (RecoverFromDuplicateIdentity(parsed.Error))
+                    {
+                        EnsureConnection();
+                        sentFollowup = false;
+                        continue;
+                    }
+
                     SetState(ControlState.Error, null, parsed.Error);
                     return false;
                 }
@@ -696,6 +722,34 @@ namespace Tailscale.Core.Control
         private bool IsBrowserOpened()
         {
             lock (_gate) return _status.BrowserOpened;
+        }
+
+        /// <summary>
+        /// Il control server rifiuta una registrazione la cui node key conosce gia'
+        /// (tipicamente un device cancellato dal pannello admin, che non libera la
+        /// chiave). Non e' un errore definitivo: si riprova con un'identita' nuova.
+        /// </summary>
+        private static bool LooksLikeDuplicateIdentity(string text)
+        {
+            return text != null
+                   && text.IndexOf("already exists", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        /// <summary>
+        /// Rigenera l'identita' e segnala che la registrazione va ritentata. Un solo
+        /// refresh per avvio: se anche la chiave nuova viene rifiutata, l'errore e'
+        /// reale e va mostrato invece di ciclare.
+        /// </summary>
+        private bool RecoverFromDuplicateIdentity(string text)
+        {
+            if (!LooksLikeDuplicateIdentity(text)) return false;
+            if (_identityRefreshes >= MaxIdentityRefreshes) return false;
+
+            _identityRefreshes++;
+            _options.Log.Log("il server rifiuta l'identita' salvata (nodo gia' esistente): "
+                             + "ne genero una nuova e riprovo");
+            RegenerateIdentity();
+            return true;
         }
 
         /// <summary>Rigenera il node key e riregistra con OldNodeKey (Review Focus 2).</summary>
