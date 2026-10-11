@@ -16,6 +16,8 @@ namespace Tailscale.Core.Tests
             Run("blake2s", Blake2sTests.Run);
             Run("sha256", Sha256Tests.Run);
             Run("hkdf", HkdfTests.Run);
+            Run("naclbox", NaClBoxTests.Run);
+            Run("key parse", KeyParseTests.Run);
 
             Console.WriteLine(T.Failures == 0 ? "ALL PASS" : "FAILURES: " + T.Failures);
             return T.Failures;
