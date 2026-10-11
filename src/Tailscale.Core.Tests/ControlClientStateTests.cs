@@ -24,6 +24,9 @@ namespace Tailscale.Core.Tests
             Case("login in corso: identita' conservata", PendingLoginKeepsIdentity);
             Case("login senza browser", NeedLoginSurvivesWithoutBrowser);
             Case("corpo UTF-8", BodyKeepsAccents);
+            Case("errore duplicato: recupero", RecoversFromDuplicateIdentityError);
+            Case("errore duplicato su non-200", RecoversFromDuplicateOnNonSuccess);
+            Case("errore duplicato ripetuto: stop", StopsAfterOneDuplicateRefresh);
         }
 
         private static void Case(string name, Action test)
@@ -184,6 +187,121 @@ namespace Tailscale.Core.Tests
             T.Eq(accented, Text.FromUtf8(utf8), "e si rilegge identico");
         }
 
+        /// <summary>
+        /// Il server conosce ancora la node key di un device cancellato dal pannello
+        /// admin: il client non deve fermarsi sull'errore, ma rigenerare l'identita'
+        /// (machine key compresa, quindi con un nuovo handshake) e riprovare.
+        /// </summary>
+        private static void RecoversFromDuplicateIdentityError()
+        {
+            Script script = new Script();
+            script.Enqueue(200, DuplicateError());
+            script.Enqueue(200,
+                "{\"AuthURL\":\"https://login.tailscale.com/a/xyz\",\"MachineAuthorized\":false}");
+            MemoryStateStore store = AuthorizedStore();
+
+            string firstNodeKey = null;
+            ControlClient client = RunScript(store, script, delegate(string body)
+            {
+                if (firstNodeKey == null) firstNodeKey = JsonString(body, "NodeKey");
+            });
+
+            T.Eq(2, script.Calls, "duplicato: si riprova una volta");
+            T.Eq(2, script.Connections, "duplicato: l'handshake viene rifatto (machine key nuova)");
+            T.True(JsonString(script.LastRegisterBody, "NodeKey") != firstNodeKey,
+                   "duplicato: il secondo tentativo usa una node key nuova");
+            T.Eq(ControlState.NeedLogin.ToString(), client.Status.State.ToString(),
+                 "duplicato: si arriva a NeedLogin, non a Error");
+        }
+
+        /// <summary>Lo stesso rifiuto puo' arrivare come corpo di una risposta non-200.</summary>
+        private static void RecoversFromDuplicateOnNonSuccess()
+        {
+            Script script = new Script();
+            script.Enqueue(403, DuplicateError());
+            script.Enqueue(200, AuthorizedResponse());
+            MemoryStateStore store = AuthorizedStore();
+
+            // Il solo retry non basta a distinguere il recupero dal ricarico delle
+            // chiavi di un 403: la prova e' che l'identita' sia davvero nuova.
+            string firstNodeKey = null;
+            ControlClient client = RunScript(store, script, delegate(string body)
+            {
+                if (firstNodeKey == null) firstNodeKey = JsonString(body, "NodeKey");
+            });
+
+            T.Eq(2, script.Calls, "non-200: si riprova una volta");
+            T.True(JsonString(script.LastRegisterBody, "NodeKey") != firstNodeKey,
+                   "non-200: anche qui l'identita' e' nuova");
+            T.True(client.Status.State != ControlState.Error, "non-200: recuperato, nessun errore mostrato");
+        }
+
+        /// <summary>
+        /// Se anche l'identita' nuova viene rifiutata, il client non deve rigenerare
+        /// e riprovare all'infinito: dopo un solo refresh mostra l'errore.
+        /// </summary>
+        private static void StopsAfterOneDuplicateRefresh()
+        {
+            Script script = new Script();
+            for (int i = 0; i < 4; i++) script.Enqueue(200, DuplicateError());
+            MemoryStateStore store = AuthorizedStore();
+
+            ControlClient client = RunScript(store, script, null);
+
+            T.Eq(2, script.Calls, "duplicato ripetuto: al massimo un refresh");
+            T.Eq(ControlState.Error.ToString(), client.Status.State.ToString(),
+                 "duplicato ripetuto: l'errore viene mostrato invece di ciclare");
+        }
+
+        /// <summary>La risposta esatta con cui il control server rifiuta una node key ancora nota.</summary>
+        private static string DuplicateError()
+        {
+            return "{\"Error\":\"device with nodekey:nodekey:aabbcc already exists; "
+                 + "please log out explicitly and try logging in again.\"}";
+        }
+
+        /// <summary>Uno store con un'identita' gia' autorizzata: il device che l'admin ha cancellato.</summary>
+        private static MemoryStateStore AuthorizedStore()
+        {
+            MemoryStateStore store = new MemoryStateStore();
+            store.Write("machineKey", KeyMaterial.SavePrivate(KeyPair.Generate(new SequenceRandomSource(150))));
+            store.Write("nodeKey", "nodekey:" + new string('d', 64));
+            store.Write("authorized", "1");
+            return store;
+        }
+
+        /// <summary>
+        /// Avvia un client su una connessione "a copione": la factory ne crea una
+        /// nuova a ogni chiamata (cosi' si conta se l'handshake e' stato rifatto) e
+        /// tutte condividono lo script delle risposte.
+        /// </summary>
+        private static ControlClient RunScript(IStateStore store, Script script, Action<string> onRegister)
+        {
+            ControlClientOptions options = Options(store, new FakeConnection());
+            // Il test misura i tentativi di registrazione, non il polling del login:
+            // un AuthURL chiude subito il ciclo invece di ripetersi ogni 3s.
+            options.LoginTimeoutSeconds = 0;
+            script.OnRegister = onRegister;
+            options.ConnectionFactory = delegate()
+            {
+                script.Connections++;
+                return new ScriptedConnection(script);
+            };
+
+            ControlClient[] holder = new ControlClient[1];
+            int sleeps = 0;
+            options.Sleep = delegate(int milliseconds)
+            {
+                sleeps++;
+                if (sleeps > 2 && holder[0] != null) holder[0].Stop();
+            };
+
+            ControlClient client = new ControlClient(options);
+            holder[0] = client;
+            client.Start();
+            return client;
+        }
+
         // --- attrezzi ---
 
         private static string AuthorizedResponse()
@@ -247,6 +365,64 @@ namespace Tailscale.Core.Tests
                 if (lines[i].IndexOf(fragment, StringComparison.Ordinal) >= 0) return true;
             }
             return false;
+        }
+
+        /// <summary>Le risposte che il server finto deve dare, in ordine, e i contatori osservati.</summary>
+        private sealed class Script
+        {
+            private readonly List<int> _statuses = new List<int>();
+            private readonly List<string> _bodies = new List<string>();
+
+            public int Calls;
+            public int Connections;
+            public string LastRegisterBody;
+            public Action<string> OnRegister;
+
+            public void Enqueue(int status, string body)
+            {
+                _statuses.Add(status);
+                _bodies.Add(body);
+            }
+
+            public ControlResponse Next(string jsonBody)
+            {
+                LastRegisterBody = jsonBody;
+                if (OnRegister != null) OnRegister(jsonBody);
+
+                int index = Calls;
+                Calls++;
+                // Esaurito lo script si ripete l'ultima risposta: un login in attesa
+                // riceve lo stesso AuthURL finche' non cambia qualcosa.
+                int at = index < _bodies.Count ? index : _bodies.Count - 1;
+                if (at < 0) at = 0;
+                ControlResponse response = new ControlResponse();
+                response.StatusCode = _statuses.Count > 0 ? _statuses[at] : 500;
+                response.Body = _bodies.Count > 0 ? _bodies[at] : "{}";
+                return response;
+            }
+        }
+
+        private sealed class ScriptedConnection : IControlConnection
+        {
+            private readonly Script _script;
+
+            public ScriptedConnection(Script script) { _script = script; }
+
+            public ControlResponse Post(string path, string jsonBody,
+                                        List<KeyValuePair<string, string>> headers)
+            {
+                return _script.Next(jsonBody);
+            }
+
+            public void PostStream(string path, string jsonBody,
+                                   List<KeyValuePair<string, string>> headers,
+                                   Action<string> onJson, int watchdogSeconds)
+            {
+            }
+
+            public bool IsBroken { get { return false; } }
+
+            public void Dispose() { }
         }
 
         private sealed class FakeConnection : IControlConnection

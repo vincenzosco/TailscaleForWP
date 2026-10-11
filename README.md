@@ -127,6 +127,10 @@ Scelte che vale la pena conoscere leggendo il codice:
 5. I documenti di piano e il ledger vivono in `docs/`, che è **git-ignorato** in
    questo repository: non compaiono qui su GitHub. Se ti servono versionati, va
    tolto `docs/` dal `.gitignore`.
+6. **Un device cancellato dal pannello admin non libera la node key sul server.**
+   Il client se ne accorge dall'errore `device with nodekey:... already exists`,
+   genera un'identità nuova (machine key + node key) e riprova. Per questo, se
+   l'app non risultava autorizzata, al primo login compare un device nuovo.
 
 ## Sicurezza
 
