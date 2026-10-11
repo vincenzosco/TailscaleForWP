@@ -140,12 +140,28 @@ namespace Tailscale.Core.Control
     {
         public static JsonValue Parse(string text)
         {
+            int consumed;
+            JsonValue value = ParsePrefix(text, out consumed);
+            if (consumed != text.Length)
+                throw new JsonParseException("testo in eccesso dopo il valore, alla posizione " + consumed);
+            return value;
+        }
+
+        /// <summary>
+        /// Interpreta il primo valore e dice quanti caratteri ha consumato.
+        ///
+        /// Serve allo stream della netmap: il corpo della risposta map sono piu'
+        /// valori JSON uno dopo l'altro, e chi legge deve sapere dove finisce il
+        /// primo per non perdere l'inizio del successivo.
+        /// </summary>
+        public static JsonValue ParsePrefix(string text, out int consumed)
+        {
+            if (text == null) throw new ArgumentNullException("text");
             int position = 0;
             SkipWhitespace(text, ref position);
             JsonValue value = ParseValue(text, ref position, 0);
             SkipWhitespace(text, ref position);
-            if (position != text.Length)
-                throw new JsonParseException("testo in eccesso dopo il valore, alla posizione " + position);
+            consumed = position;
             return value;
         }
 
