@@ -1,0 +1,69 @@
+using System;
+using System.IO;
+using Tailscale.Core.Protocol;
+
+namespace Tailscale.Core.Control
+{
+    /// <summary>
+    /// Espone i frame del trasporto Noise come uno stream di byte.
+    ///
+    /// Il control plane parla HTTP/2 sopra Noise: qui sotto c'e' quindi un client
+    /// HTTP/2 (Tailscale.Core.Protocol.Http2Connection), che legge e scrive su
+    /// questo stream.
+    ///
+    /// In lettura i frame vengono consumati come richiesto dai lettori di byte:
+    /// senza questo buffer ogni lettura di pochi byte costerebbe un frame intero.
+    /// </summary>
+    public sealed class NoiseFrameStream : Stream
+    {
+        private readonly NoiseTransport _transport;
+        private byte[] _pending = new byte[0];
+        private int _position;
+        private readonly int _readTimeoutMs;
+        private DateTime _lastActivityUtc;
+
+        public NoiseFrameStream(NoiseTransport transport, int readTimeoutMs)
+        {
+            if (transport == null) throw new ArgumentNullException("transport");
+            _transport = transport;
+            _readTimeoutMs = readTimeoutMs;
+            _lastActivityUtc = DateTime.UtcNow;
+        }
+
+        /// <summary>Ultimo istante in cui e' arrivato un frame: lo usa il watchdog.</summary>
+        public DateTime LastActivityUtc { get { return _lastActivityUtc; } }
+
+        public override bool CanRead { get { return true; } }
+        public override bool CanSeek { get { return false; } }
+        public override bool CanWrite { get { return true; } }
+        public override long Length { get { throw new NotSupportedException(); } }
+        public override long Position { get { throw new NotSupportedException(); } set { throw new NotSupportedException(); } }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) { throw new NotSupportedException(); }
+        public override void SetLength(long value) { throw new NotSupportedException(); }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            if (count == 0) return 0;
+            while (_position >= _pending.Length)
+            {
+                _pending = _transport.ReadFrame();
+                _position = 0;
+                _lastActivityUtc = DateTime.UtcNow;
+            }
+
+            int available = Math.Min(count, _pending.Length - _position);
+            Array.Copy(_pending, _position, buffer, offset, available);
+            _position += available;
+            return available;
+        }
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            if (count == 0) return;
+            byte[] chunk = new byte[count];
+            Array.Copy(buffer, offset, chunk, 0, count);
+            _transport.Write(chunk);
+        }
+    }
+}
