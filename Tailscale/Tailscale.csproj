@@ -130,6 +130,10 @@
     <!-- Senza questa voce le .resw non finiscono in resources.pri e la UI
          mostrerebbe le chiavi grezze invece del testo tradotto. -->
     <PRIResource Include="Resources\**\*.resw" />
+    <!-- Il pacchetto WP8.1 non compila le .resw in resources.pri con il
+         solo PRIResource: vanno anche incluse come contenuto, cosi' MakePri
+         le indicizza dal layout del pacchetto. -->
+    <Content Include="Resources\**\*.resw" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath)\Microsoft\WindowsXaml\v$(VisualStudioVersion)\Microsoft.Windows.UI.Xaml.CSharp.targets" />
 </Project>
