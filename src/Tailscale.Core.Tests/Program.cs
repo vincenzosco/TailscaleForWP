@@ -21,6 +21,7 @@ namespace Tailscale.Core.Tests
             Run("hkdf blake2s", HkdfBlake2sTests.Run);
             Run("noise handshake", NoiseHandshakeTests.Run);
             Run("noise transport", NoiseTransportTests.Run);
+            Run("hpack tables", HpackTableTests.Run);
 
             Console.WriteLine(T.Failures == 0 ? "ALL PASS" : "FAILURES: " + T.Failures);
             return T.Failures;
