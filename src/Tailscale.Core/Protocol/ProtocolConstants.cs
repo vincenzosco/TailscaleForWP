@@ -52,6 +52,11 @@ namespace Tailscale.Core.Protocol
         public const int AeadTagLen = 16;
         public const int MaxPlaintextSize = MaxCiphertextSize - AeadTagLen;
 
+        // Header aggiunto alle richieste di registrazione e map con il node key:
+        // tailcfg.LBHeader = "Ts-Lb" (tailcfg/tailcfg.go:3109). Serve al bilanciatore
+        // per instradare tutte le richieste dello stesso nodo allo stesso server.
+        public const string LbHeaderName = "Ts-Lb";
+
         // Endpoint del control plane.
         public const string RegisterPath = "/machine/register";
         public const string MapPath = "/machine/map";
