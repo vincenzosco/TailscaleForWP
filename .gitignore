@@ -10,3 +10,7 @@ refs/
 # output del provisioning (contiene configurazione)
 provisioning/out/
 provisioning/backup-*.txt
+
+# scratch dell executor e output di packaging
+.superpowers/
+AppPackages/
