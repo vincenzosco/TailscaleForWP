@@ -23,6 +23,7 @@ namespace Tailscale.Core.Tests
             Run("noise transport", NoiseTransportTests.Run);
             Run("hpack tables", HpackTableTests.Run);
             Run("hpack decoder", HpackDecoderTests.Run);
+            Run("http2", Http2Tests.Run);
 
             Console.WriteLine(T.Failures == 0 ? "ALL PASS" : "FAILURES: " + T.Failures);
             return T.Failures;
