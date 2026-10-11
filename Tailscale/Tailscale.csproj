@@ -86,6 +86,13 @@
     <Compile Include="MainPage.xaml.cs">
       <DependentUpon>MainPage.xaml</DependentUpon>
     </Compile>
+    <!--
+      Gli adattatori di piattaforma: l'unico codice che tocca le API WinRT. Stanno
+      separati dal motore perche' il motore compila anche sui test del PC.
+    -->
+    <Compile Include="Services\PhonePlatform.cs" />
+    <Compile Include="Services\PhoneStores.cs" />
+    <Compile Include="Services\EngineService.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>
@@ -93,7 +100,14 @@
       Il motore condiviso: stesso sorgente del progetto desktop, nessuna copia.
       Così il codice che gira sul telefono è esattamente quello che i test del PC hanno verificato.
     -->
-    <Compile Include="..\src\Tailscale.Core\**\*.cs" Exclude="..\src\Tailscale.Core\obj\**\*.cs;..\src\Tailscale.Core\bin\**\*.cs">
+    <!--
+      FileStateStore resta fuori: usa System.IO.File/Directory, che sul profilo
+      WP8.1 non esistono. Sul telefono lo stato sta in LocalSettings e la chiave
+      nel portachiavi (Tailscale\Services\PhoneStores.cs). Escluderlo qui e' piu'
+      chiaro di una direttiva #if dentro il motore, che altrimenti nasconderebbe
+      al compilatore del PC il codice che il PC deve testare.
+    -->
+    <Compile Include="..\src\Tailscale.Core\**\*.cs" Exclude="..\src\Tailscale.Core\obj\**\*.cs;..\src\Tailscale.Core\bin\**\*.cs;..\src\Tailscale.Core\Util\FileStateStore.cs">
       <Link>Core\%(RecursiveDir)%(Filename)%(Extension)</Link>
     </Compile>
   </ItemGroup>

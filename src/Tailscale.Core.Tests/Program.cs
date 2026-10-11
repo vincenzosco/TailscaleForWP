@@ -27,6 +27,8 @@ namespace Tailscale.Core.Tests
             Run("early payload", EarlyPayloadTests.Run);
             Run("control client", ControlClientTests.Run);
             Run("control state", ControlClientStateTests.Run);
+            Run("netmap", NetworkMapTests.Run);
+            Run("canale di controllo", ControlChannelOrderTests.Run);
             Run("key material", KeyMaterialTests.Run);
             Run("file state store", FileStateStoreTests.Run);
 

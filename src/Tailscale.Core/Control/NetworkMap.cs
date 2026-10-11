@@ -45,7 +45,10 @@ namespace Tailscale.Core.Control
 
             if (response.Self != null) Self = response.Self;
 
-            if (response.Peers.Count > 0) ReplacePeers(response.Peers);
+            // La lista intera si applica anche quando e' vuota: e' il modo in cui il
+            // server dice "non c'e' piu' nessun peer". Guardando solo Count > 0,
+            // l'ultimo peer rimosso resterebbe nella netmap per sempre.
+            if (response.PeersPresent) ReplacePeers(response.Peers);
             foreach (NodeInfo changed in response.PeersChanged) Upsert(changed);
             foreach (long removed in response.PeersRemoved) Remove(removed);
         }
