@@ -19,14 +19,18 @@ repository contains the proof, not just the code.
 | Noise IK handshake (controlbase) | **Done** | **Against the real server**: `Tailscale.Cli handshake` |
 | Server keys, ts2021 dialer, HTTP upgrade | **Done** | `Tailscale.Cli handshake` against `controlplane.tailscale.com` |
 | Noise transport framing | **Done** | In-memory tests, including authentication of every byte |
-| Node registration, netmap, login URL | **In progress, blocked** | The server speaks **HTTP/2** inside Noise; see "Known limitations" |
+| Node registration, netmap, login URL | **Done in code, outlined by tests** | In-memory tests for the state machine (deadlines, retries, netmap) and `Tailscale.Cli login` for the real server; the acceptance on a phone is still manual |
 | App UI (login, peer list) | Not started | — |
 | Logos and splash screens | **Done** | The package contains the images byte for byte |
 | Localization (en-US, it-IT) | Resources done | The `it` language package contains the translated strings; the accessor is missing |
 
-Honest detail: **the app cannot log in yet**. The handshake works against the
-real server, registration does not. The reason is documented with the evidence,
-not hidden: see `docs/superpowers/plans/2026-10-11-wp81-tailscale-1-control-plane-login.md`.
+Honest detail: the handshake works against the real server, and registration,
+the netmap and the request deadlines are implemented and covered by the
+in-memory tests — but **none of it has been verified on a phone yet**. That
+last step needs a person and a real device, and it is the one proof this
+repository cannot produce by itself. What is missing is written down with the
+evidence instead of hidden: see
+`docs/superpowers/plans/2026-10-11-wp81-tailscale-14-request-deadlines.md`.
 
 ## The proof that matters
 
@@ -116,27 +120,42 @@ Choices worth knowing when reading the code:
 
 ## Known limitations
 
-1. **The control server speaks HTTP/2 inside the Noise transport.** The Go client
-   forces it (`tr.Protocols.SetUnencryptedHTTP2(true)`, `control/ts2021/client.go`),
-   and an HTTP/1.1 request is closed without a response.
-   `Control/NoiseControlConnection.cs` speaks HTTP/1.1: node registration and the
-   netmap do not work until an HTTP/2 implementation exists (preface, frames,
-   HPACK). This is the next piece of work, described in the plan of Plan 1.
-2. **Registration requires a person.** The acceptance step involves opening the
+1. **Registration requires a person.** The acceptance step involves opening the
    login URL and signing in with a Tailscale account: it cannot be automated.
-   Until then Task 10 stays unverified even with HTTP/2 in place.
-3. **No data plane.** No WireGuard, no SOCKS proxy: the app handles the control
+   Until then Task 10 stays unverified.
+2. **No data plane.** No WireGuard, no SOCKS proxy: the app handles the control
    plane. The data plane is Plan 2, not started.
-4. **Localization has no accessor yet.** The translated strings are in the
+3. **Localization has no accessor yet.** The translated strings are in the
    package, but Task 2 of the localization plan is missing.
-5. The plan documents and the ledger live in `docs/`, which is **git-ignored** in
+4. The plan documents and the ledger live in `docs/`, which is **git-ignored** in
    this repository: they do not show up here on GitHub. If you need them
    versioned, remove `docs/` from `.gitignore`.
-6. **A device deleted from the admin panel does not free the node key on the
+5. **A device deleted from the admin panel does not free the node key on the
    server.** The client notices from the `device with nodekey:... already exists`
    error, generates a new identity (machine key + node key) and retries. Because
    of this, if the app was not authorized, the first login shows up as a new
    device.
+6. **The system can interrupt a read on the control socket** (the app is
+   suspended, or the socket is closed abruptly): the error is
+   `The I/O operation has been aborted because of either a thread exit or an
+   application request` (`0x800703E3`). The client recognises it as a channel
+   failure, declares the channel broken, rebuilds it and retries — up to
+   `MaxChannelRetries` times for registration, then it shows an error instead of
+   retrying forever. The app itself stops the engine on suspension by closing
+   the socket, and on the way back to the foreground the engine starts again
+   with the saved identity: the device in the tailnet stays one.
+7. **No request waits forever any more.** Every request to the control server
+   carries a deadline: short for a registration that is not a followup
+   (`RegisterTimeoutSeconds`, 60s) and equal to the time left in the login window
+   for a followup, because the server keeps that response open while the user
+   signs in — a fixed value would either cut the browser off mid-login or outlive
+   the window. A followup that expires is the end of the login window, not a
+   channel failure: the state stays `NeedLogin` and the URL can be reopened. A
+   netmap that never arrives stops with an error after the channel budget, while
+   a netmap that arrived and was then lost keeps retrying without clearing what
+   the user is looking at. The deadlines are verified on in-memory streams, where
+   they end as a zero-byte read; on the phone the same `Dispose` produces the
+   `0x800703E3` abort above, which is the case the phone check has to confirm.
 
 ## Security
 
@@ -179,14 +198,18 @@ questo repository contiene la prova, non solo il codice.
 | Handshake Noise IK (controlbase) | **Fatto** | **Contro il server reale**: `Tailscale.Cli handshake` |
 | Chiavi del server, dialer ts2021, upgrade HTTP | **Fatto** | `Tailscale.Cli handshake` contro `controlplane.tailscale.com` |
 | Framing del trasporto Noise | **Fatto** | Test in memoria, inclusa l'autenticazione di ogni byte |
-| Registrazione del nodo, netmap, URL di login | **In corso, bloccata** | Il server parla **HTTP/2** dentro Noise; vedi "Limiti noti" |
+| Registrazione del nodo, netmap, URL di login | **Fatto nel codice, delineato dai test** | Test in memoria per la macchina a stati (scadenze, ritentate, netmap) e `Tailscale.Cli login` per il server vero; l'accettazione sul telefono e' ancora manuale |
 | UI dell'app (login, lista peer) | Non iniziata | — |
 | Loghi e splash screen | **Fatto** | Il pacchetto contiene le immagini byte per byte |
 | Localizzazione (en-US, it-IT) | Risorse fatte | Il pacchetto di lingua `it` contiene le stringhe tradotte; manca l'accessor |
 
-Dettaglio onesto: **l'app non fa ancora login**. L'handshake funziona contro il
-server vero, la registrazione no. Il perché è documentato con l'evidenza, non
-nascosto: vedi `docs/superpowers/plans/2026-10-11-wp81-tailscale-1-control-plane-login.md`.
+Dettaglio onesto: l'handshake funziona contro il server vero, e registrazione,
+netmap e scadenze delle richieste sono implementate e coperte dai test in
+memoria — ma **niente di tutto questo e' stato verificato su un telefono**. Quel
+passo richiede una persona e un dispositivo vero, ed e' l'unica prova che questo
+repository non puo' produrre da se'. Quello che manca e' scritto con l'evidenza,
+non nascosto: vedi
+`docs/superpowers/plans/2026-10-11-wp81-tailscale-14-request-deadlines.md`.
 
 ## La prova che conta
 
@@ -273,27 +296,21 @@ Scelte che vale la pena conoscere leggendo il codice:
 
 ## Limiti noti
 
-1. **Il control server parla HTTP/2 dentro il trasporto Noise.** Il client Go lo
-   forza (`tr.Protocols.SetUnencryptedHTTP2(true)`, `control/ts2021/client.go`), e
-   una richiesta HTTP/1.1 viene chiusa senza risposta. `Control/NoiseControlConnection.cs`
-   parla HTTP/1.1: la registrazione del nodo e la netmap non funzionano finché non
-   esiste un'implementazione HTTP/2 (prefazione, frame, HPACK). È il prossimo lavoro,
-   descritto nel piano del Piano 1.
-2. **La registrazione richiede una persona.** Il passo di accettazione prevede di
+1. **La registrazione richiede una persona.** Il passo di accettazione prevede di
    aprire l'URL di login e accedere con un account Tailscale: non è automatizzabile.
-   Fino ad allora il Task 10 resta non verificato anche con HTTP/2 a posto.
-3. **Nessun data plane.** Niente WireGuard, niente proxy SOCKS: l'app gestisce il
+   Fino ad allora il Task 10 resta non verificato.
+2. **Nessun data plane.** Niente WireGuard, niente proxy SOCKS: l'app gestisce il
    piano di controllo. Il piano dati è il Piano 2, non iniziato.
-4. **La localizzazione non ha ancora un accessor.** Le stringhe tradotte sono nel
+3. **La localizzazione non ha ancora un accessor.** Le stringhe tradotte sono nel
    pacchetto, ma manca il Task 2 del piano di localizzazione.
-5. I documenti di piano e il ledger vivono in `docs/`, che è **git-ignorato** in
+4. I documenti di piano e il ledger vivono in `docs/`, che è **git-ignorato** in
    questo repository: non compaiono qui su GitHub. Se ti servono versionati, va
    tolto `docs/` dal `.gitignore`.
-6. **Un device cancellato dal pannello admin non libera la node key sul server.**
+5. **Un device cancellato dal pannello admin non libera la node key sul server.**
    Il client se ne accorge dall'errore `device with nodekey:... already exists`,
    genera un'identità nuova (machine key + node key) e riprova. Per questo, se
    l'app non risultava autorizzata, al primo login compare un device nuovo.
-7. **Il sistema può interrompere una lettura sul socket del control server**
+6. **Il sistema può interrompere una lettura sul socket del control server**
    (sospensione dell'app, socket chiuso di colpo): l'errore è
    `The I/O operation has been aborted because of either a thread exit or an
    application request` (`0x800703E3`). Il client lo riconosce come guasto di
@@ -302,6 +319,19 @@ Scelte che vale la pena conoscere leggendo il codice:
    ritentare per sempre. Alla sospensione il motore lo ferma l'app chiudendo lei il
    socket, e al ritorno in primo piano riparte da solo riusando l'identità salvata:
    il device nel tailnet resta uno.
+7. **Nessuna richiesta resta appesa per sempre.** Ogni richiesta al control server
+   porta con se' una scadenza: corta per una registrazione che non e' una followup
+   (`RegisterTimeoutSeconds`, 60s) e pari al tempo che resta alla finestra di login
+   per una followup, perche' il server tiene aperta quella risposta mentre l'utente
+   accede -- un valore fisso o taglierebbe il browser a meta' login o vivrebbe piu'
+   della finestra. Una followup scaduta e' la fine della finestra di login, non un
+   guasto del canale: lo stato resta `NeedLogin` e l'URL si puo' riaprire. Una
+   netmap che non arriva mai si ferma con un errore dopo il tetto dei tentativi,
+   mentre una netmap gia' arrivata e poi persa continua a ritentare senza
+   cancellare quello che l'utente sta guardando. Le scadenze sono verificate su
+   stream in memoria, dove finiscono con una lettura a zero byte; sul telefono lo
+   stesso `Dispose` produce l'abort `0x800703E3` descritto sopra, ed e' il caso che
+   la verifica sul telefono deve confermare.
 
 ## Sicurezza
 
