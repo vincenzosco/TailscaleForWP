@@ -26,6 +26,9 @@ namespace Tailscale.Core.Tests
             Run("http2", Http2Tests.Run);
             Run("early payload", EarlyPayloadTests.Run);
             Run("control client", ControlClientTests.Run);
+            Run("control state", ControlClientStateTests.Run);
+            Run("key material", KeyMaterialTests.Run);
+            Run("file state store", FileStateStoreTests.Run);
 
             Console.WriteLine(T.Failures == 0 ? "ALL PASS" : "FAILURES: " + T.Failures);
             return T.Failures;

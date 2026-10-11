@@ -49,6 +49,12 @@ namespace Tailscale.Core.Tailcfg
         public bool Ephemeral;
         public Hostinfo Hostinfo;
 
+        /// <summary>
+        /// Chiave di autenticazione ("tskey-auth-..."): quando c'e', il server
+        /// autorizza il nodo senza che nessuno apra il browser (R6).
+        /// </summary>
+        public string Auth = "";
+
         public string ToJson()
         {
             JsonWriter w = new JsonWriter();
@@ -57,6 +63,7 @@ namespace Tailscale.Core.Tailcfg
             w.String("NodeKey", NodeKey);
             if (OldNodeKey != null && OldNodeKey.Length > 0) w.String("OldNodeKey", OldNodeKey);
             if (Followup != null && Followup.Length > 0) w.String("Followup", Followup);
+            if (Auth != null && Auth.Length > 0) w.String("Auth", Auth);
             if (Ephemeral) w.Bool("Ephemeral", true);
             if (Hostinfo != null)
             {
