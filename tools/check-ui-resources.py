@@ -30,9 +30,12 @@ REQUIRED_NAMES = ("DeviceText", "StatusText", "PrimaryButton", "LoginHint",
 # vede il codice: nel .resw la stessa chiave si scrive con il punto, perche' il
 # punto separa il controllo dalla proprieta' ("PeersHeader/Text" sta in resw come
 # "PeersHeader.Text").
+# StopButton/Content e' l'etichetta del pulsante quando e' collegato: la legge
+# MainPage.xaml.cs#LabelKey, e per molto tempo e' rimasta nei .resw senza che
+# nessuno la leggesse (il pulsante diceva "Avvia" mentre fermava il motore).
 REQUIRED_KEYS = ("Status_Connecting", "Status_NeedLogin", "Status_Authorized",
                  "Status_Error", "Status_Stopped", "LoginButton/Content",
-                 "StartButton/Content", "PeerOnline", "PeerOffline",
+                 "StartButton/Content", "StopButton/Content", "PeerOnline", "PeerOffline",
                  "PeersHeader/Text", "PeerCountFormat")
 
 

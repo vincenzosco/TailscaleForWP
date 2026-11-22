@@ -435,8 +435,11 @@ namespace Tailscale.Core.Protocol
 
             // Blocco spezzato: si accumula e si decodifica alla fine. Decodificare
             // ora significherebbe leggere un blocco a meta' e dissezionare la
-            // tabella dinamica per il resto della connessione.
+            // tabella dinamica per il resto della connessione. END_STREAM invece si
+            // legge subito, perche' sta sull'HEADERS e la CONTINUATION non lo
+            // ripete: perso qui non si recupera piu', e il corpo non finirebbe mai.
             state.PartialHeaderBlock = block;
+            state.PartialHeaderEndStream = frame.Has(Http2Frame.FlagEndStream);
             return;
         }
 
@@ -455,6 +458,9 @@ namespace Tailscale.Core.Protocol
                 state.Headers = _decoder.Decode(state.PartialHeaderBlock);
                 state.HeadersDone = true;
                 state.PartialHeaderBlock = null;
+                // L'END_STREAM era sull'HEADERS che ha aperto il blocco spezzato.
+                if (state.PartialHeaderEndStream) state.Ended = true;
+                state.PartialHeaderEndStream = false;
             }
         }
 
@@ -626,6 +632,13 @@ namespace Tailscale.Core.Protocol
             public int ConsumedSinceCredit;
 
             public byte[] PartialHeaderBlock;
+
+            /// <summary>
+            /// END_STREAM visto sull'HEADERS che ha aperto un blocco spezzato su piu'
+            /// frame: la CONTINUATION non lo ripete, quindi va ricordato fino a
+            /// quando il blocco e' completo.
+            /// </summary>
+            public bool PartialHeaderEndStream;
 
             public StreamState(int id)
             {

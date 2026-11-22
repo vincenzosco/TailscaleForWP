@@ -124,19 +124,27 @@ def main():
         print("FAIL: mancano i dati OCR per: " + ", ".join(missing))
         return 1
 
-    # Le stringhe che devono essere leggibili, per lingua e per schermata.
+    # Le stringhe che devono essere leggibili, per lingua e per schermata. Le tre
+    # schermate (fermo, collegato, accesso richiesto) coprono le tre etichette del
+    # pulsante principale: "Avvia", "Ferma", "Accedi".
     expectations = {
         "en-US": {
             "needLogin": ["Status_NeedLogin", "LoginButton/Content", "LoginHint/Text"],
-            "authorized": ["Status_Authorized", "StartButton/Content", "PeersHeader/Text",
+            "authorized": ["Status_Authorized", "StopButton/Content", "PeersHeader/Text",
                            "LogHeader/Text"],
+            "stopped": ["Status_Stopped", "StartButton/Content", "PeersHeader/Text",
+                        "LogHeader/Text"],
         },
         "it-IT": {
             "needLogin": ["Status_NeedLogin", "LoginButton/Content", "LoginHint/Text"],
-            "authorized": ["Status_Authorized", "StartButton/Content", "PeersHeader/Text",
+            "authorized": ["Status_Authorized", "StopButton/Content", "PeersHeader/Text",
                            "LogHeader/Text"],
+            "stopped": ["Status_Stopped", "StartButton/Content", "PeersHeader/Text",
+                        "LogHeader/Text"],
         },
     }
+
+    states = ("needLogin", "authorized", "stopped")
 
     checked = 0
     failures = []
@@ -147,7 +155,7 @@ def main():
             failures.append("manca %s" % resw)
             continue
 
-        for state in ("needLogin", "authorized"):
+        for state in states:
             name = os.path.join(args.preview, "ui-%s-%s.png" % (language, state))
             if not os.path.exists(name):
                 failures.append("%s non esiste: esegui prima render-ui-preview.py" % name)
@@ -180,7 +188,7 @@ def main():
             print("FAIL: " + failure)
         return 1
 
-    print("OCR OK: %d stringhe lette su %d immagini" % (checked, 4))
+    print("OCR OK: %d stringhe lette su %d immagini" % (checked, len(LANGUAGES) * len(states)))
     return 0
 
 

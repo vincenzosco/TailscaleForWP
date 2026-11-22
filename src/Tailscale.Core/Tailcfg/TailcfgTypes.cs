@@ -370,6 +370,12 @@ namespace Tailscale.Core.Tailcfg
 
         public void Raw(string json)
         {
+            // Separate() prima di accodare: Name() mette _firstInScope a vero, quindi
+            // un valore grezzo dopo un nome non prende una virgola in piu'; dentro un
+            // array invece due elementi accodati di fila devono separarsi, altrimenti
+            // il risultato non e' JSON (["a""b"]) e nessuno se ne accorge finche' il
+            // server non rifiuta la richiesta.
+            Separate();
             _buffer.Append(json);
             _firstInScope = false;
         }

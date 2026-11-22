@@ -27,6 +27,9 @@ namespace Tailscale.Core.Tests
             Case("motore: un corpo che lancia libera comunque il motore", AFailingBodyStillFreesTheEngine);
             Case("motore: lo stato si vede mentre il ciclo gira", IsRunningIsVisibleWhileTheBodyRuns);
             Case("motore: dopo l'uscita si puo' ripartire", TheEngineCanRestartAfterTheBodyReturns);
+            Case("motore: con il motore libero l'avvio non aspetta", AFreeEngineStartsWithoutWaiting);
+            Case("motore: l'avvio aspetta il ciclo che sta uscendo", AStartWaitsForTheCycleThatIsLeaving);
+            Case("motore: l'avvio che aspetta e non trova posto lo dice", AStartGivesUpWhenTheCycleKeepsRunning);
         }
 
         private static void Case(string name, Action test)
@@ -177,6 +180,108 @@ namespace Tailscale.Core.Tests
             release.Set();
             worker.Join(JoinMs);
             T.False(state.IsRunning, "motore: uscito il ciclo, il motore risulta fermo");
+        }
+
+        /// <summary>
+        /// Con il motore libero non c'e' niente da aspettare: l'attesa che serve al
+        /// caso del telefono non deve diventare un ritardo su ogni avvio.
+        /// </summary>
+        private static void AFreeEngineStartsWithoutWaiting()
+        {
+            EngineRunState state = new EngineRunState();
+            int runs = 0;
+            int waits = 0;
+
+            bool started = state.RunWhenFree(delegate { runs++; },
+                                             delegate(int ms) { waits++; }, 5, 1);
+
+            T.True(started, "motore: con il posto libero il ciclo parte");
+            T.Eq(1, runs, "motore: e il corpo e' stato eseguito");
+            T.Eq(0, waits, "motore: senza attendere nemmeno una volta");
+            T.False(state.IsRunning, "motore: uscito il corpo, il motore e' libero");
+        }
+
+        /// <summary>
+        /// Il caso del telefono, in piccolo: un ciclo tiene il posto e sta uscendo --
+        /// l'arresto e' stato chiesto adesso, oppure il budget e' finito. L'avvio che
+        /// aspetta deve entrare appena il posto si libera, invece di essere rifiutato
+        /// e sparire.
+        /// </summary>
+        private static void AStartWaitsForTheCycleThatIsLeaving()
+        {
+            EngineRunState state = new EngineRunState();
+            ManualResetEvent inside = new ManualResetEvent(false);
+            ManualResetEvent release = new ManualResetEvent(false);
+            int waits = 0;
+            int runs = 0;
+
+            Thread leaving = new Thread(delegate()
+            {
+                state.Run(delegate()
+                {
+                    inside.Set();
+                    release.WaitOne(JoinMs);
+                });
+            });
+            leaving.IsBackground = true;
+            leaving.Start();
+            inside.WaitOne(JoinMs);
+
+            // L'attesa del tentativo e' il momento in cui il ciclo in uscita se ne va:
+            // il join rende l'esito certo, senza dipendere dal tempo.
+            bool started = state.RunWhenFree(delegate { runs++; },
+                                             delegate(int ms)
+                                             {
+                                                 waits++;
+                                                 release.Set();
+                                                 leaving.Join(JoinMs);
+                                             }, 5, 1);
+
+            T.True(started, "motore: l'avvio che aspetta entra quando il posto si libera");
+            T.Eq(1, runs, "motore: e il corpo e' stato eseguito una volta");
+            T.Eq(1, waits, "motore: con una sola attesa");
+            T.False(state.IsRunning, "motore: alla fine il motore e' libero");
+        }
+
+        /// <summary>
+        /// Se il ciclo non esce entro il budget, il rifiuto resta la risposta giusta
+        /// (due client sullo stesso stato si contenderebbero la stessa chiave):
+        /// l'avvio si arrende, lo dice con il falso, e il ciclo in moto non viene
+        /// toccato.
+        /// </summary>
+        private static void AStartGivesUpWhenTheCycleKeepsRunning()
+        {
+            EngineRunState state = new EngineRunState();
+            ManualResetEvent inside = new ManualResetEvent(false);
+            ManualResetEvent release = new ManualResetEvent(false);
+            int waits = 0;
+            int runs = 0;
+
+            Thread worker = new Thread(delegate()
+            {
+                state.Run(delegate()
+                {
+                    inside.Set();
+                    release.WaitOne(JoinMs);
+                });
+            });
+            worker.IsBackground = true;
+            worker.Start();
+            inside.WaitOne(JoinMs);
+
+            bool started = state.RunWhenFree(delegate { runs++; },
+                                             delegate(int ms) { waits++; }, 3, 1);
+
+            T.False(started, "motore: dopo i tentativi previsti l'avvio si arrende");
+            T.Eq(0, runs, "motore: e il secondo corpo non e' mai stato eseguito");
+            T.Eq(2, waits, "motore: le attese sono quelle previste, non una di piu'");
+            T.True(state.IsRunning, "motore: il ciclo in moto non e' stato disturbato");
+
+            release.Set();
+            worker.Join(JoinMs);
+            T.True(state.RunWhenFree(delegate { runs++; }, null, 3, 1),
+                   "motore: liberato il posto, il prossimo avvio entra");
+            T.Eq(1, runs, "motore: e il corpo e' stato eseguito");
         }
 
         /// <summary>

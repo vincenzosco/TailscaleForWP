@@ -1,4 +1,4 @@
-docs/
+
 # progetto
 bin/
 obj/
@@ -14,6 +14,9 @@ provisioning/backup-*.txt
 # scratch dell executor e output di packaging
 .superpowers/
 AppPackages/
+
+# artefatti della pipeline di bug-hunter (ricognizione, verdetti, rapporti)
+.bug-hunter/
 
 # cache di Python dei controlli
 __pycache__/

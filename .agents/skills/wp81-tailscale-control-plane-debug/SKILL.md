@@ -40,6 +40,46 @@ Due dettagli che fanno perdere tempo se non si sanno:
   stessa cosa vista da due strati. Cercare la differenza fra i due numeri non
   porta da nessuna parte; il testo (`0x800703E3`) è quello che conta.
 
+### La schermata nera: l'eccezione sul thread della UI
+
+C'è un guasto che non somiglia a quelli sopra, perché non ha nessuna catena di
+rete: la pagina resta nera, non si vede niente, e con il debugger collegato il
+break è su un'eccezione che col protocollo non c'entra niente. La causa sta nel
+disegno della pagina, e la traccia esiste perché l'app la scrive:
+`Tailscale/App.xaml.cs#OnUnhandledException` aggancia `UnhandledException` e passa
+l'eccezione a `Tailscale/Services/EngineService.cs#LogException`, che ne registra
+tipo, messaggio, cause e stack nel file del registro. Prima di quell'aggancio
+un'eccezione sul thread della UI portava via l'app senza lasciare niente, quindi
+l'unica diagnosi possibile era un debugger collegato — l'opposto di quello per cui
+il registro su file esiste.
+
+Il caso visto su un telefono vero il 2026-10-11, dal registro tirato giù:
+
+```
+eccezione non gestita: System.ArgumentNullException: Value cannot be null.
+   at System.StubHelpers.HStringMarshaler.ConvertToNativeReference(String managed, HSTRING_HEADER* hstringHeader)
+   at Windows.UI.Xaml.Controls.TextBlock.put_Text(String value)
+   at Tailscale.MainPage.Refresh()
+   at Tailscale.MainPage.OnNavigatedTo(NavigationEventArgs e)
+```
+
+Il primo disegno della pagina leggeva il nome del dispositivo da
+`Tailscale/Services/EngineService.cs#DeviceName`, che il motore scrive sul proprio
+thread di lavoro: fra `Start()` e la prima riga del motore quella proprietà era
+ancora nulla, e un `TextBlock` non accetta un testo nullo. Da allora la proprietà
+non restituisce mai nullo — il motore la riempie appena parte e notifica il
+cambio — quindi il primo disegno mostra il nome vuoto per un istante invece di far
+morire l'app.
+
+Due cose da sapere davanti a un caso simile:
+
+- l'eccezione **non** viene marcata `Handled`: resta un errore, e nasconderla
+  renderebbe l'app "funzionante" con la schermata nera, che è il guasto da non
+  produrre;
+- la traccia nomina un metodo della pagina, non del core. Se in quel registro non
+  c'è nessuna riga di protocollo, il guasto è nel disegno, e cercarci un
+  `ControlStreamException` porta fuori strada.
+
 ## 2. Il significato, e perché spesso non c'è niente da correggere
 
 Il client **conosce** questa classe di guasto:
@@ -74,10 +114,23 @@ socket morto, ed è per questo che il client lo distingue.
 | `log:login non completato entro ` | la finestra di login è finita senza che il browser risultasse usato (`src/Tailscale.Core/Control/ControlClient.cs#RemainingLoginSeconds`) | l'URL resta valido: l'utente lo riapre dal pulsante |
 | `log:nodo autorizzato; ultimo login: ` | la registrazione è conclusa: da qui in poi la netmap si legge da sola | nessuna |
 | `log:registro su file: ` | all'avvio: dice **dove** l'app scrive il registro sul telefono | nessuna: è l'informazione che serve per tirarlo fuori con `ISETool.exe` |
+| `log:eccezione non gestita` | un'eccezione sul **thread della UI**: la pagina non si è disegnata, lo schermo resta nero e l'app termina (l'eccezione non è marcata `Handled`) | guasto vero, e la riga che segue è la traccia: la catena comincia da un metodo della pagina (`MainPage`), non dal core |
 | `log:il motore non parte: la sorgente casuale del sistema non e' utilizzabile` | la sorgente casuale non passa il controllo, quindi l'app **non** costruisce il client di proposito (`src/Tailscale.Core/Util/RandomSourceCheck.cs#IsUsable`) | guasto vero del dispositivo: con quella sorgente l'identità sarebbe la stessa a ogni avvio e il server rifiuterebbe la node key |
 | `log:portachiavi: l'identita' non sopravvivera' al riavvio` | il portachiavi accetta la scrittura ma restituisce altro in lettura: il dispositivo apparirà nuovo a ogni avvio | non fatale, ma va riportato: il tailnet si riempie di dispositivi doppi |
 | `log:registro su file non disponibile: ` | il file del registro non è scrivibile: la diagnosi resta solo a schermo, e sparisce con l'app | dirlo quando si riporta il problema, perché le righe che mancano sono quelle |
-| `log:il motore e' gia' in moto: nessuna seconda partenza` | un secondo avvio chiesto mentre il ciclo del motore gira: viene rifiutato di proposito (due client sullo stesso stato si contenderebbero la stessa chiave) | nessuna: il pulsante torna vivo quando il ciclo esce |
+| `log:il motore e' ancora in uscita: aspetto che si liberi` | l'avvio ha trovato il motore occupato da un ciclo in uscita -- arresto chiesto adesso, o budget esaurito -- e aspetta che si liberi invece di rifiutare la richiesta (`src/Tailscale.Core/Util/EngineRunState.cs#RunWhenFree`) | nessuna: è la correzione del 2026-10-11 in azione. Se la segue `log:avvio del motore` ha aspettato il tempo giusto; se invece l'app resta ferma, il pulsante principale rimette in moto il motore |
+| `log:il motore e' gia' in moto: nessuna seconda partenza` | un avvio chiesto mentre un ciclo del motore gira ancora: il rifiuto è voluto (due client sullo stesso stato si contenderebbero la stessa chiave), e arriva solo dopo il margine di attesa (`src/Tailscale.Core/Util/EngineRunState.cs#RunWhenFree`) | nessuna: è una risposta, non un guasto. Se però l'app resta su "Accesso richiesto" con il motore fermo, il pulsante principale lo rimette in moto |
+
+Il caso visto su un telefono vero il 2026-10-11 — quel rifiuto capitato a un
+**ritorno in primo piano** arrivato mentre il ciclo precedente stava uscendo,
+con l'app ferma su "Accesso richiesto" e il pulsante che apriva solo il browser
+— è **corretto**: la richiesta di avvio aspetta che il motore si liberi
+(`src/Tailscale.Core/Util/EngineRunState.cs#RunWhenFree`, con il suo test in
+`src/Tailscale.Core.Tests/EngineRunStateTests.cs`) e in `NeedLogin` il pulsante
+fa ripartire un motore fermo (`Tailscale/MainPage.xaml.cs#OnPrimaryButtonClick`).
+Se quel quadro si rivede, è un caso da riportare: le righe da cercare sono
+`log:il motore e' gia' in moto: nessuna seconda partenza` e, prima di essa,
+`log:arresto del motore`.
 
 ## 4. Cosa fare quando si riporta il problema
 
@@ -86,6 +139,9 @@ socket morto, ed è per questo che il client lo distingue.
 - La **traccia completa** se c'è un'eccezione, con il nome del tipo.
 - Cosa stava facendo l'app: primo accesso, ritorno dal browser, app lasciata in
   primo piano, passaggio in secondo piano e ritorno.
+- Se lo schermo era **nero**, la riga `log:eccezione non gestita` per intero, con
+  tipo, messaggio, cause e stack: è la sola prova di cosa ha ucciso il thread
+  della UI, e distingue un guasto del disegno da uno del protocollo.
 
 E cosa **non** incollare mai: chiavi private di qualunque forma, e l'URL di login
 completo (basta dire "URL di login aperto"). Il controllo `tools/check-agents.py`

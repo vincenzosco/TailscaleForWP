@@ -22,6 +22,19 @@ RESW = os.path.join("Tailscale", "Resources", "Strings", "%s", "Resources.resw")
 WIDTH, HEIGHT = 480, 800
 MARGIN = 16
 
+# Le tre schermate disegnate, con lo stato di controllo e l'azione del pulsante
+# principale. La regola dell'etichetta e' quella del core
+# (src/Tailscale.Core/Util/PrimaryButtonPolicy.cs): collegato o in corso ->
+# "Ferma", fermo o in errore -> "Avvia", login in sospeso -> "Accedi". Sono tre
+# immagini e non due proprio per questo: dopo la correzione del 2026-10-12 il
+# pulsante cambia parola, e ogni parola deve restare verificata (leggibile, non
+# tagliata) in entrambe le lingue.
+STATES = {
+    "needLogin": {"status": "Status_NeedLogin", "button": "LoginButton/Content"},
+    "authorized": {"status": "Status_Authorized", "button": "StopButton/Content"},
+    "stopped": {"status": "Status_Stopped", "button": "StartButton/Content"},
+}
+
 # Le proporzioni sono quelle del telefono; i corpi dei testi sono letti dal XAML.
 FALLBACK_FONT_SIZE = 16.0
 
@@ -80,7 +93,7 @@ def wrap(text, draw, face, max_width):
 
 
 def draw_screen(language, state):
-    """state: 'needLogin' oppure 'authorized'."""
+    """state: una delle chiavi di STATES (needLogin, authorized, stopped)."""
     values = resources(language)
     sizes = font_sizes()
 
@@ -92,12 +105,10 @@ def draw_screen(language, state):
     draw.text((MARGIN, y), device, font=font(sizes.get("DeviceText", 22)), fill=(240, 240, 240))
     y += 34
 
-    status_key = "Status_NeedLogin" if state == "needLogin" else "Status_Authorized"
-    draw.text((MARGIN, y), values[status_key], font=font(sizes.get("StatusText", 16)), fill=(190, 190, 195))
+    draw.text((MARGIN, y), values[STATES[state]["status"]], font=font(sizes.get("StatusText", 16)), fill=(190, 190, 195))
     y += 34
 
-    button_key = "LoginButton/Content" if state == "needLogin" else "StartButton/Content"
-    button_label = values[button_key]
+    button_label = values[STATES[state]["button"]]
     button_height = 48
     draw.rectangle([MARGIN, y, WIDTH - MARGIN, y + button_height], outline=(150, 150, 160))
     label_face = font(sizes.get("PrimaryButton", 20))
@@ -164,7 +175,7 @@ def main():
         if not os.path.exists(RESW % language):
             print("FAIL: manca %s" % (RESW % language))
             return 1
-        for state in ("needLogin", "authorized"):
+        for state in sorted(STATES):
             image = draw_screen(language, state)
             path = os.path.join(args.out, "ui-%s-%s.png" % (language, state))
             image.save(path)

@@ -153,8 +153,9 @@ namespace Tailscale.Core.Protocol
         /// <summary>Risolve un indice nelle due tabelle (RFC 7541 §2.3.3).</summary>
         private HpackHeader GetIndexed(int index, int position)
         {
-            if (index == 0)
-                throw new HpackException("indice HPACK 0 (byte " + position + "): non esiste alcuna voce 0");
+            if (index <= 0)
+                throw new HpackException("indice HPACK " + index + " (byte " + position
+                    + "): non esiste alcuna voce con questo indice");
 
             if (index <= StaticTableLength)
                 return new HpackHeader(HpackTables.StaticNames[index], HpackTables.StaticValues[index]);
@@ -200,17 +201,25 @@ namespace Tailscale.Core.Protocol
             return header.Name.Length + header.Value.Length + EntryOverhead;
         }
 
-        /// <summary>Intero con prefisso e continuazione (RFC 7541 §5.1).</summary>
+        /// <summary>
+        /// Intero con prefisso e continuazione (RFC 7541 §5.1).
+        ///
+        /// L'accumulatore e' un <c>long</c>: con un <c>int</c> la continuazione a
+        /// shift 28 fa traboccare il valore, e un intero corrotto tornerebbe come un
+        /// indice negativo (o un altro numero sbagliato) invece che come errore di
+        /// codifica. Un indice negativo finirebbe poi su <c>Names[negativo]</c> e
+        /// uscirebbe come eccezione di indice, che nessun chiamante sa leggere.
+        /// </summary>
         private static int ReadInteger(byte[] block, ref int position, int prefixBits)
         {
             if (position >= block.Length)
                 throw new HpackException("blocco HPACK troncato: manca l'intero");
 
             int mask = (1 << prefixBits) - 1;
-            int value = block[position] & mask;
+            long value = block[position] & mask;
             position++;
 
-            if (value < mask) return value;
+            if (value < mask) return (int)value;
 
             int shift = 0;
             while (true)
@@ -220,8 +229,10 @@ namespace Tailscale.Core.Protocol
                 int next = block[position];
                 position++;
 
-                value += (next & 0x7F) << shift;
-                if ((next & 0x80) == 0) return value;
+                value += (long)(next & 0x7F) << shift;
+                if (value > int.MaxValue)
+                    throw new HpackException("intero HPACK oltre il massimo (" + value + ")");
+                if ((next & 0x80) == 0) return (int)value;
 
                 shift += 7;
                 if (shift > 28)

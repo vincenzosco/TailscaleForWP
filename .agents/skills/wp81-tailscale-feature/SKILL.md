@@ -75,6 +75,11 @@ Cosa non fare:
 Una stringa nuova nella UI non può restare senza risorsa: `python
 tools/check-ui-resources.py` (dentro il gate) confronta le stringhe usate con le
 risorse e fallisce se una manca. Nessuna emoji: `python tools/check-no-emoji.py`.
+E un testo che finisce in un `TextBlock` non può essere nullo: un TextBlock non
+accetta un testo nullo, e l'eccezione arriva sul thread della UI (la schermata
+nera). `python tools/check-ui-null-text.py` (dentro il gate) legge i TextBlock dal
+XAML e le assegnazioni della pagina, e rilegge la dichiarazione delle proprietà
+che accetta come mai nulle.
 
 ## 5. Aggiornare il README, in entrambe le lingue
 

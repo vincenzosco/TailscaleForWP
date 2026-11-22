@@ -23,6 +23,32 @@ namespace Tailscale
             // In VB l'aggancio era dichiarativo (Handles Me.Suspending).
             this.Suspending += OnSuspending;
             this.Resuming += OnResuming;
+            // Un'eccezione non gestita sul thread della UI moriva con la schermata
+            // nera, e nel registro non restava niente: senza questa riga la diagnosi
+            // di quel guasto e' un debugger collegato, cioe' l'opposto di quello che
+            // il registro su file esiste per fare.
+            this.UnhandledException += OnUnhandledException;
+        }
+
+        /// <summary>
+        /// Lascia una traccia dell'eccezione non gestita nel registro dell'app, che
+        /// vive in un file e si puo' tirare fuori dal telefono.
+        ///
+        /// Non si marca `Handled` di proposito: l'errore resta un errore, e
+        /// nasconderlo renderebbe l'app "funzionante" con una schermata nera. Qui
+        /// interessa solo che lasci il tipo, il messaggio, la causa e lo stack.
+        /// </summary>
+        private void OnUnhandledException(object sender, UnhandledExceptionEventArgs e)
+        {
+            try
+            {
+                EngineService.Current.LogException("eccezione non gestita", e.Exception);
+            }
+            catch (Exception)
+            {
+                // Se persino la diagnosi fallisce non si peggiora la situazione:
+                // l'eccezione originale deve arrivare intatta al sistema.
+            }
         }
 
         protected override void OnLaunched(LaunchActivatedEventArgs e)

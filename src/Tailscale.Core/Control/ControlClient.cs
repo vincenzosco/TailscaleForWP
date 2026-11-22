@@ -470,6 +470,18 @@ namespace Tailscale.Core.Control
                                  + "): " + ex.Message);
                 SetState(ControlState.Error, null, ex.Message);
             }
+            finally
+            {
+                // Start torna quando il ciclo e' finito, per qualunque ragione: arresto
+                // voluto, budget dei tentativi esaurito (netmap mai arrivata, canale
+                // sempre rotto) o un errore. Da quel momento il canale non serve piu' a
+                // nessuno: se resta aperto e' un socket e uno stream WinRT lasciati in
+                // giro a ogni ciclo andato a vuoto, e l'app invita a ripetere i cicli
+                // proprio col pulsante principale. Si chiude qui e non in Stop()
+                // perche' Stop() cambia lo stato in Stopped, mentre l'uscita per budget
+                // deve lasciare visibile l'errore che la spiega.
+                DisposeConnection();
+            }
         }
 
         /// <summary>

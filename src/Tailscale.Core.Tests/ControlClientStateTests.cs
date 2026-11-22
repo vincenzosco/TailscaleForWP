@@ -40,6 +40,7 @@ namespace Tailscale.Core.Tests
             Case("primo tentativo scaduto: si ritenta", AFirstAttemptThatTimesOutIsRetried);
             Case("arresto durante una scadenza: non e' un errore", StoppingDuringADeadlineIsNotAnError);
             Case("netmap mai arrivata: si smette con un errore", MapNeverArrivesGivesUpWithAnError);
+            Case("ciclo uscito da solo: il canale viene chiuso", ChannelIsReleasedWhenTheCycleGivesUp);
             Case("netmap persa dopo l'arrivo: si ritenta senza cancellare", MapDropsAfterItArrivedKeepsRetrying);
         }
 
@@ -503,6 +504,37 @@ namespace Tailscale.Core.Tests
         }
 
         /// <summary>
+        /// Quando il ciclo esce da solo (budget dei tentativi esaurito) nessuno chiama
+        /// Stop: il canale pero' non serve piu' a nessuno. Se resta aperto e' un socket
+        /// e uno stream WinRT lasciati in giro a ogni ciclo andato a vuoto, e il
+        /// pulsante principale dell'app invita proprio a ripetere i cicli. Lo stato
+        /// Error deve restare visibile (e' cio' che spiega perche' il motore si e'
+        /// fermato): chiudere il canale non deve cancellarlo.
+        /// </summary>
+        private static void ChannelIsReleasedWhenTheCycleGivesUp()
+        {
+            MemoryStateStore store = new MemoryStateStore();
+            FlakyConnection connection = new FlakyConnection(AuthorizedResponse(), 0);
+            connection.MapFails = true;
+            connection.MapMessage = null;
+
+            ControlClientOptions options = Options(store, new FakeConnection());
+            options.MaxChannelRetries = 2;
+            options.ConnectionFactory = delegate() { return connection; };
+            // Il backoff e' istantaneo e non ferma il client: il ciclo deve uscire da
+            // solo, non perche' qualcuno ha chiamato Stop.
+            options.Sleep = delegate(int milliseconds) { };
+
+            ControlClient client = new ControlClient(options);
+            client.Start();
+
+            T.Eq(ControlState.Error.ToString(), client.Status.State.ToString(),
+                 "ciclo uscito da solo: lo stato Error resta visibile");
+            T.True(connection.Disposed > 0,
+                   "ciclo uscito da solo: il canale viene chiuso invece di restare aperto");
+        }
+
+        /// <summary>
         /// Dopo la prima netmap i dati che l'utente vede sono validi: il client
         /// continua a ritentare come il client Go, invece di dichiarare un errore e
         /// lasciare la lista peer in mano a un messaggio.
@@ -738,7 +770,13 @@ namespace Tailscale.Core.Tests
             options.Sleep = delegate(int milliseconds)
             {
                 sleeps++;
-                if (sleeps > 2 && holder[0] != null) holder[0].Stop();
+                if (holder[0] == null) return;
+                // Il backoff dorme a pezzi (dieci attese per il primo gradino): fermare
+                // il ciclo dopo due attese lo interrompeva *prima* che notasse il canale
+                // rotto. Si aspetta quindi che il canale sia stato davvero rifatto
+                // (created >= 2) e, per sicurezza, un tetto largo: il finto canale non
+                // consegna mai una netmap, quindi il ciclo non finirebbe da solo.
+                if ((created >= 2 && sleeps > 1) || sleeps > 40) holder[0].Stop();
             };
 
             ControlClient client = new ControlClient(options);
@@ -980,7 +1018,10 @@ namespace Tailscale.Core.Tests
 
             public bool IsBroken { get { return false; } }
 
-            public void Dispose() { }
+            /// <summary>Quante volte il client ha chiuso questo canale.</summary>
+            public int Disposed;
+
+            public void Dispose() { Disposed++; }
         }
 
         /// <summary>Fallisce una volta si' e una no: un canale instabile, non un canale morto.</summary>

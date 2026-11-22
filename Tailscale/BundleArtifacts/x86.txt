@@ -1,0 +1,3 @@
+MainPackage=C:\Users\Vincenzo\Documents\Tailscale\Tailscale\bin\x86\Release\Tailscale_1.0.0.0_Bundle\Tailscale_1.0.0.0_x86.appx
+SymbolPackage=C:\Users\Vincenzo\Documents\Tailscale\Tailscale\AppPackages\Tailscale_1.0.0.0_Test\Tailscale_1.0.0.0_x86.appxsym
+ResourcePack=C:\Users\Vincenzo\Documents\Tailscale\Tailscale\bin\x86\Release\Tailscale_1.0.0.0_Bundle\Tailscale_1.0.0.0_language-it.appx

@@ -28,6 +28,15 @@ if exist tools\check-ui-resources.py (
   python tools\check-ui-resources.py || exit /b 1
 )
 
+rem Un TextBlock non accetta un testo nullo: l'eccezione arriva sul thread della
+rem UI e l'app termina con la schermata nera (il guasto del 2026-10-11). Il
+rem controllo legge i TextBlock dal XAML, le assegnazioni dalla pagina, e rilegge
+rem la dichiarazione delle proprieta' che accetta come mai nulle.
+if exist tools\check-ui-null-text.py (
+  echo [0/5] Testo della UI non nullo
+  python tools\check-ui-null-text.py || exit /b 1
+)
+
 rem Le skill degli agent devono descrivere il codice che c'e' davvero: un file
 rem rinominato o una riga di registro cambiata senza aggiornare la skill e' una
 rem istruzione che manda a cercare qualcosa che non esiste.

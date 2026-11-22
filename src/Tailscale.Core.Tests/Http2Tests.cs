@@ -27,6 +27,7 @@ namespace Tailscale.Core.Tests
             Case("frame", ParsesFrames);
             Case("richiesta", WritesRequestAndReadsResponse);
             Case("continuation", ReassemblesContinuation);
+            Case("continuation + END_STREAM", ContinuationKeepsEndStream);
             Case("stream senza fine", StreamsWithoutWaitingForEnd);
             Case("finestra", SendsAckWindowUpdatesAndPing);
             Case("goaway", GoAwayIsAnError);
@@ -353,6 +354,37 @@ namespace Tailscale.Core.Tests
 
             T.Eq(200, response.StatusCode, "continuation: stato 200");
             T.Eq("application/json", response.ContentType, "continuation: header decodificati interi");
+        }
+
+        /// <summary>
+        /// END_STREAM puo' stare sull'HEADERS anche quando il blocco di header e'
+        /// spezzato su una CONTINUATION, e la CONTINUATION non lo ripete. Perdendolo,
+        /// il corpo non finisce mai e chi legge resta appeso su dati che non
+        /// arriveranno (nel caso peggiore: una risposta senza corpo che non si chiude).
+        /// </summary>
+        private static void ContinuationKeepsEndStream()
+        {
+            byte[] block = HeaderBlock(":status", "200");
+            byte[] first = new byte[1];
+            byte[] second = new byte[block.Length - 1];
+            Array.Copy(block, 0, first, 0, 1);
+            Array.Copy(block, 1, second, 0, second.Length);
+
+            ScriptedStream stream = new ScriptedStream();
+            stream.Script(ServerSettings());
+            stream.Script(new Http2Frame(Http2FrameType.Headers,
+                Http2Frame.FlagEndStream, 1, first).ToBytes());
+            stream.Script(new Http2Frame(Http2FrameType.Continuation,
+                Http2Frame.FlagEndHeaders, 1, second).ToBytes());
+
+            Http2Connection connection = new Http2Connection(stream, NullLogSink.Instance);
+            Http2Response response = connection.Post("/machine/register", T.FromHex("7b7d"),
+                new List<KeyValuePair<string, string>>());
+
+            T.Eq(200, response.StatusCode, "continuation + END_STREAM: stato 200");
+            byte[] buffer = new byte[1];
+            T.Eq(0, response.Body.Read(buffer, 0, 1),
+                 "continuation + END_STREAM: il corpo e' finito, nessuna lettura appesa");
         }
 
         private static void StreamsWithoutWaitingForEnd()

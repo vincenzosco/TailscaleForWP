@@ -118,6 +118,7 @@ namespace Tailscale.Core.Tests
             RejectsOutOfTableIndex();
             RejectsIndexZero();
             RejectsBadHuffmanPadding();
+            RejectsOverlongInteger();
         }
 
         private static void DecodesRequestBlock()
@@ -298,6 +299,31 @@ namespace Tailscale.Core.Tests
             List<HpackHeader> back = decoder.Decode(block);
             T.Eq(1, back.Count, "senza Huffman: un header");
             T.Eq("/machine/map", back[0].Value, "senza Huffman: valore leggibile");
+        }
+
+        /// <summary>
+        /// Un intero che trabocca i 32 bit non e' un indice "grande": e' un blocco
+        /// corrotto. Con un accumulatore a 32 bit il valore torna indietro negativo e
+        /// finisce su Names[negativo], cioe' un'eccezione di indice che non dice
+        /// niente; deve invece uscire come errore di codifica HPACK.
+        /// FF          -> campo indicizzato, indice nella continuazione
+        /// 80 80 80 80 -> quattro continuazioni a zero
+        /// 7F          -> ultimo byte: 127 << 28, oltre il massimo di un int
+        /// </summary>
+        private static void RejectsOverlongInteger()
+        {
+            HpackDecoder decoder = new HpackDecoder(NullLogSink.Instance);
+
+            bool rejectedAsHpack = false;
+            try
+            {
+                decoder.Decode(T.FromHex("ff808080807f"));
+            }
+            catch (HpackException)
+            {
+                rejectedAsHpack = true;
+            }
+            T.True(rejectedAsHpack, "intero oltre il range: rifiutato come errore di codifica HPACK");
         }
 
         private static void RejectsIndexZero()

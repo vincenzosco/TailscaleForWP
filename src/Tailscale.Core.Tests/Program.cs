@@ -28,6 +28,7 @@ namespace Tailscale.Core.Tests
             Run("control client", ControlClientTests.Run);
             Run("control state", ControlClientStateTests.Run);
             Run("netmap", NetworkMapTests.Run);
+            Run("json", JsonWriteTests.Run);
             Run("canale di controllo", ControlChannelOrderTests.Run);
             Run("key material", KeyMaterialTests.Run);
             Run("file state store", FileStateStoreTests.Run);
@@ -35,6 +36,7 @@ namespace Tailscale.Core.Tests
             Run("key vault", KeyVaultTests.Run);
             Run("log file", TextFileLogTests.Run);
             Run("ciclo del motore", EngineRunStateTests.Run);
+            Run("pulsante principale", PrimaryButtonPolicyTests.Run);
 
             Console.WriteLine(T.Failures == 0 ? "ALL PASS" : "FAILURES: " + T.Failures);
             return T.Failures;
