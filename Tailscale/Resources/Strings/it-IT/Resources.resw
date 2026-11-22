@@ -69,4 +69,29 @@
   <data name="LogHeader.Text" xml:space="preserve">
     <value>Registro</value>
   </data>
+
+  <data name="VpnConnectButton.Content" xml:space="preserve">
+    <value>Collega la VPN</value>
+  </data>
+  <data name="VpnDisconnectButton.Content" xml:space="preserve">
+    <value>Scollega la VPN</value>
+  </data>
+  <data name="Vpn_Status_On" xml:space="preserve">
+    <value>VPN: collegata (confermata dalla rilettura)</value>
+  </data>
+  <data name="Vpn_Status_Off" xml:space="preserve">
+    <value>VPN: scollegata</value>
+  </data>
+  <data name="Vpn_Status_NotConfigured" xml:space="preserve">
+    <value>VPN: non ancora configurata</value>
+  </data>
+  <data name="Vpn_Status_Locked" xml:space="preserve">
+    <value>VPN: non disponibile, questo telefono non ha l'interop unlock</value>
+  </data>
+  <data name="Vpn_Status_Unknown" xml:space="preserve">
+    <value>VPN: accesso al registro non verificato, non si scrive niente</value>
+  </data>
+  <data name="Vpn_Status_Failed" xml:space="preserve">
+    <value>VPN: scrittura non confermata, vedi il registro</value>
+  </data>
 </root>

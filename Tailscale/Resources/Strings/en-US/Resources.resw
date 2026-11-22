@@ -69,4 +69,29 @@
   <data name="LogHeader.Text" xml:space="preserve">
     <value>Log</value>
   </data>
+
+  <data name="VpnConnectButton.Content" xml:space="preserve">
+    <value>Connect the VPN link</value>
+  </data>
+  <data name="VpnDisconnectButton.Content" xml:space="preserve">
+    <value>Disconnect the VPN link</value>
+  </data>
+  <data name="Vpn_Status_On" xml:space="preserve">
+    <value>VPN link: connected (confirmed by read-back)</value>
+  </data>
+  <data name="Vpn_Status_Off" xml:space="preserve">
+    <value>VPN link: disconnected</value>
+  </data>
+  <data name="Vpn_Status_NotConfigured" xml:space="preserve">
+    <value>VPN link: not configured yet</value>
+  </data>
+  <data name="Vpn_Status_Locked" xml:space="preserve">
+    <value>VPN link: not available, this phone has no interop unlock</value>
+  </data>
+  <data name="Vpn_Status_Unknown" xml:space="preserve">
+    <value>VPN link: registry access not verified, nothing is written</value>
+  </data>
+  <data name="Vpn_Status_Failed" xml:space="preserve">
+    <value>VPN link: write not confirmed, see the log</value>
+  </data>
 </root>

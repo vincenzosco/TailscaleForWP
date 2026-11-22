@@ -24,7 +24,8 @@ RESW = os.path.join("Tailscale", "Resources", "Strings", "%s", "Resources.resw")
 # Nomi che MainPage.xaml.cs cerca: rinominarli nel XAML senza toccare il codice
 # darebbe una NullReferenceException a runtime, sul telefono.
 REQUIRED_NAMES = ("DeviceText", "StatusText", "PrimaryButton", "LoginHint",
-                  "NoBrowserHint", "PeersHeader", "PeerList", "LogHeader", "LogText")
+                  "NoBrowserHint", "VpnText", "VpnButton", "PeersHeader", "PeerList",
+                  "LogHeader", "LogText")
 
 # Chiavi usate dal codice (ResourceLoader.GetString). La barra e' la forma che
 # vede il codice: nel .resw la stessa chiave si scrive con il punto, perche' il
@@ -36,7 +37,10 @@ REQUIRED_NAMES = ("DeviceText", "StatusText", "PrimaryButton", "LoginHint",
 REQUIRED_KEYS = ("Status_Connecting", "Status_NeedLogin", "Status_Authorized",
                  "Status_Error", "Status_Stopped", "LoginButton/Content",
                  "StartButton/Content", "StopButton/Content", "PeerOnline", "PeerOffline",
-                 "PeersHeader/Text", "PeerCountFormat")
+                 "PeersHeader/Text", "PeerCountFormat",
+                 "VpnConnectButton/Content", "VpnDisconnectButton/Content",
+                 "Vpn_Status_On", "Vpn_Status_Off", "Vpn_Status_NotConfigured",
+                 "Vpn_Status_Locked", "Vpn_Status_Unknown", "Vpn_Status_Failed")
 
 
 def read(path):

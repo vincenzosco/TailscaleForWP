@@ -94,6 +94,9 @@
     <Compile Include="Services\PhoneStores.cs" />
     <Compile Include="Services\PhoneLogFile.cs" />
     <Compile Include="Services\EngineService.cs" />
+    <Compile Include="Services\VpnLinkService.cs" />
+    <Compile Include="Native\NtRegistryApi.cs" />
+    <Compile Include="Native\TelnetRegistryApi.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>

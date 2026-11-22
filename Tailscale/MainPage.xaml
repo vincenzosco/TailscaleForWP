@@ -52,6 +52,21 @@
                        Opacity="0.8"
                        Visibility="Collapsed"
                        TextWrapping="Wrap" />
+
+            <!-- Riga 1b: il collegamento "VPN via interop". Il testo di stato lo
+                 scrive il codice dalle risorse (Vpn_Status_*), quindi non ha
+                 x:Uid: una sola fonte di verita', come per lo stato del motore.
+                 Il pulsante dice l'azione che il tocco compie, non di piu'. -->
+            <TextBlock x:Name="VpnText"
+                       Margin="0,8,0,0"
+                       FontSize="13"
+                       Opacity="0.8"
+                       TextWrapping="Wrap" />
+            <Button x:Name="VpnButton"
+                    Click="OnVpnButtonClick"
+                    Margin="0,4,0,0"
+                    HorizontalAlignment="Left"
+                    FontSize="14" />
         </StackPanel>
 
         <!-- Riga 2: i dispositivi del tailnet. -->

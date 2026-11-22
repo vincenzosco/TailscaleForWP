@@ -23,6 +23,17 @@ namespace Tailscale.Services
         /// <summary>Un'ora: l'app resta in ascolto dell'esito del login finche' e' aperta.</summary>
         private const int PhoneLoginSeconds = 3600;
 
+        /// <summary>
+        /// Quanto, e ogni quanto, si aspetta che il ciclo precedente liberi il motore
+        /// prima di dichiarare l'avvio rifiutato. Un arresto chiesto adesso chiude il
+        /// socket in pochi millisecondi, ma il ciclo puo' essere nel mezzo di una
+        /// pausa fra due tentativi: il margine e' di secondi, non di millisecondi.
+        /// Oltre quello il rifiuto resta la risposta giusta, e la via d'uscita
+        /// dell'utente resta il pulsante principale.
+        /// </summary>
+        private const int StartAttempts = 30;
+        private const int StartWaitMilliseconds = 100;
+
         /// <summary>Le ultime righe, quelle che la schermata mostra.</summary>
         private readonly RingLogSink _ring = new RingLogSink(LogLines);
 
@@ -31,6 +42,15 @@ namespace Tailscale.Services
 
         /// <summary>Dove va ogni riga: la schermata e il file.</summary>
         private readonly ILogSink _log;
+
+        /// <summary>
+        /// Il collegamento "VPN via interop": si attiva da solo quando il motore
+        /// si collega, si attiva e disattiva dalla pagina, e la sua conferma viene
+        /// rileggendo il registro. Vive qui per un motivo preciso: la pagina non
+        /// deve sapere nulla del registro, e il motore e' l'unico che sa quando il
+        /// telefono e' davvero collegato.
+        /// </summary>
+        private readonly VpnLinkService _vpn;
 
         private readonly object _gate = new object();
 
@@ -60,6 +80,12 @@ namespace Tailscale.Services
             // Il file vero nasce alla prima riga: qui si costruisce solo la politica.
             _fileLog = new TailLogFile(new WinRtLogFile(), Snapshot, LogLines * 2, _ring);
             _log = new FanoutLogSink(_ring, _fileLog);
+            _vpn = new VpnLinkService(_log, new LocalSettingsAdapter());
+            _vpn.Changed += RaiseChanged;
+
+            // Lo stato del collegamento si rilegge dal registro all'avvio: la
+            // pagina deve mostrare cio' che il telefono ha, non un'icona ferma.
+            _vpn.RefreshAsync();
         }
 
         private string[] Snapshot()
@@ -70,7 +96,22 @@ namespace Tailscale.Services
         /// <summary>Cambiato qualcosa che la UI mostra: stato, netmap o registro.</summary>
         public event Action Changed;
 
-        public string DeviceName { get; private set; }
+        private string _deviceName;
+
+        /// <summary>
+        /// Il nome del dispositivo. Non e' mai nullo, e questo e' il punto: la pagina
+        /// lo legge al primo disegno, quando il motore -- che gira su un thread di
+        /// lavoro -- non l'ha ancora scritto. Un TextBlock non accetta null
+        /// (`TextBlock.put_Text` solleva ArgumentNullException anche per una stringa
+        /// nulla), e l'eccezione arrivava sul thread della UI: l'app partiva con la
+        /// schermata nera e nel registro non restava niente. Il motore lo riempie
+        /// appena parte e notifica il cambio, quindi la pagina si aggiorna da sola.
+        /// </summary>
+        public string DeviceName
+        {
+            get { return _deviceName == null ? "" : _deviceName; }
+            private set { _deviceName = value; }
+        }
 
         /// <summary>
         /// Vero se il ciclo del motore e' in corso. Se il ciclo e' uscito da solo
@@ -115,23 +156,53 @@ namespace Tailscale.Services
             get { return _fileLog.Location; }
         }
 
+        /// <summary>Il collegamento "VPN via interop": la pagina ne legge lo stato e ne preme il pulsante.</summary>
+        public VpnLinkService Vpn
+        {
+            get { return _vpn; }
+        }
+
         /// <summary>
         /// Avvia il client, su un thread di lavoro: il login e la netmap sono attese
         /// lunghe e la pagina deve restare reattiva.
         ///
-        /// Due chiamate ravvicinate non fanno nascere due motori: la seconda non
-        /// trova posto e lo dice nel registro. Il ciclo libera il motore quando esce
-        /// -- anche quando esce per un errore -- ed e' quello che riaccende il
-        /// pulsante principale.
+        /// Due chiamate ravvicinate non fanno nascere due motori, e **una richiesta
+        /// che arriva mentre il ciclo precedente sta uscendo non si perde**: aspetta
+        /// che il posto si liberi e riprova. E' il caso visto sul telefono il
+        /// 2026-10-11: il ritorno in primo piano arrivava mentre il ciclo stava
+        /// uscendo, l'avvio veniva rifiutato e spariva, e in stato "Accesso
+        /// richiesto" il pulsante apre solo il browser: da li' il motore non
+        /// ripartiva piu'. Il ciclo libera il motore quando esce -- anche quando esce
+        /// per un errore -- ed e' quello che riaccende il pulsante principale.
         /// </summary>
         public void Start()
         {
             Task.Factory.StartNew(delegate()
             {
+                // Il motore puo' essere occupato da un ciclo che sta uscendo: si aspetta
+                // che si liberi. La prima attesa si registra una volta sola, ed e' la
+                // riga che dice se la richiesta ha dovuto aspettare: senza di essa la
+                // differenza fra "l'avvio entra subito" e "l'avvio aspetta" non si
+                // vedrebbe dal registro.
+                bool waited = false;
+                Action<int> wait = delegate(int milliseconds)
+                {
+                    if (!waited)
+                    {
+                        waited = true;
+                        _log.Log("il motore e' ancora in uscita: aspetto che si liberi");
+                    }
+                    WaitBetweenStartAttempts(milliseconds);
+                };
+
                 try
                 {
-                    if (!_run.Run(RunEngine))
+                    if (!_run.RunWhenFree(RunEngine, wait, StartAttempts, StartWaitMilliseconds))
                     {
+                        // Il ciclo precedente non ha liberato il motore entro il
+                        // margine: la richiesta non parte. La pagina mostra ancora lo
+                        // stato di prima, e il pulsante principale resta la via per
+                        // riprovare.
                         _log.Log("il motore e' gia' in moto: nessuna seconda partenza");
                         return;
                     }
@@ -282,6 +353,10 @@ namespace Tailscale.Services
         /// di controllo viene rifatto (quello di prima e' morto con la sospensione) e
         /// la netmap riletta, riusando l'identita' salvata -- il device nel tailnet
         /// resta uno.
+        ///
+        /// Il ritorno puo' arrivare mentre il ciclo precedente sta ancora uscendo (basta
+        /// tornare all'app subito dopo averla lasciata): la richiesta non viene persa,
+        /// perche' l'avvio aspetta che il motore si liberi invece di rifiutare.
         /// </summary>
         public void Resume()
         {
@@ -324,6 +399,33 @@ namespace Tailscale.Services
             }
         }
 
+        /// <summary>
+        /// Scrive nel registro un'eccezione non gestita, con il tipo, il messaggio,
+        /// le cause e lo stack. E' la traccia che altrimenti sul telefono non resta
+        /// da nessuna parte: la si legge dal file, senza un debugger collegato.
+        /// </summary>
+        public void LogException(string what, Exception error)
+        {
+            if (error == null)
+            {
+                _log.Log(what + ": nessuna eccezione (da chiarire)");
+                return;
+            }
+
+            _log.Log(what + ": " + error.GetType().FullName + ": " + error.Message);
+
+            // Le cause: quella interna e' spesso l'unica che dice cosa e' successo
+            // davvero (l'esterno dice solo quale strato se n'e' accorto).
+            Exception cause = error.InnerException;
+            for (int depth = 0; cause != null && depth < 4; depth++)
+            {
+                _log.Log("  causa: " + cause.GetType().FullName + ": " + cause.Message);
+                cause = cause.InnerException;
+            }
+
+            if (error.StackTrace != null) _log.Log(error.StackTrace);
+        }
+
         /// <summary>Dimentica chiavi e stato: il prossimo avvio e' un nodo nuovo.</summary>
         public void Logout()
         {
@@ -337,6 +439,14 @@ namespace Tailscale.Services
 
         private void OnClientChanged()
         {
+            // Il motore e' cambiato stato: se e' collegato davvero, il
+            // collegamento via interop parte da solo. L'errore qui non deve
+            // disturbare il motore: resta nel registro.
+            try { _vpn.OnEngineState(Status.State); }
+            catch (Exception ex)
+            {
+                _log.Log("vpn: errore sul cambio di stato (" + ex.GetType().Name + "): " + ex.Message);
+            }
             RaiseChanged();
         }
 
@@ -344,6 +454,18 @@ namespace Tailscale.Services
         {
             Action handler = Changed;
             if (handler != null) handler();
+        }
+
+        /// <summary>
+        /// L'attesa fra due tentativi di avvio. Sul telefono non c'e'
+        /// `System.Threading.Thread`: la fornisce `Task.Delay`, lo stesso schema di
+        /// `ControlClientOptions.Sleep`. Un'attesa interrotta non e' un errore qui:
+        /// il tentativo successivo e' gia' in programma, ed e' il ciclo che decide.
+        /// </summary>
+        private static void WaitBetweenStartAttempts(int milliseconds)
+        {
+            try { Task.Delay(milliseconds).Wait(); }
+            catch (Exception) { }
         }
 
         private static string ReadDeviceName()
