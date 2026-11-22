@@ -16,6 +16,7 @@ namespace Tailscale.Core.Tests
         public static void Run()
         {
             ArrayElementsAreSeparated();
+            ContainersInArrayAreSeparated();
             EmptyArrayIsStillAnArray();
         }
 
@@ -43,6 +44,32 @@ namespace Tailscale.Core.Tests
             JsonValue endpoints = parsed["Endpoints"];
             T.True(endpoints != null && endpoints.IsArray, "array: il campo Endpoints e' un array");
             T.Eq(2, endpoints.Count, "array: due endpoint leggibili");
+        }
+
+        /// <summary>
+        /// Un contenitore dentro un array deve prendere la virgola come uno scalare:
+        /// senza, [{...}{...}] non e' JSON. Il caso reale e' un array di oggetti
+        /// scritto con BeginObject dopo il primo elemento.
+        /// </summary>
+        private static void ContainersInArrayAreSeparated()
+        {
+            JsonWriter writer = new JsonWriter();
+            writer.BeginArray();
+            writer.BeginObject();
+            writer.String("a", "1");
+            writer.EndObject();
+            writer.BeginObject();
+            writer.String("b", "2");
+            writer.EndObject();
+            writer.EndArray();
+
+            T.Eq("[{\"a\":\"1\"},{\"b\":\"2\"}]", writer.ToString(),
+                 "array di oggetti: la virgola sta fra un oggetto e l'altro");
+
+            // E il risultato deve restare JSON valido per il nostro stesso parser.
+            JsonValue parsed = JsonBody.Parse(writer.ToString());
+            T.True(parsed != null && parsed.IsArray, "array di oggetti: il risultato e' un array");
+            T.Eq(2, parsed.Count, "array di oggetti: due elementi leggibili");
         }
 
         /// <summary>Un elenco vuoto resta un array vuoto: la virgola non compare.</summary>

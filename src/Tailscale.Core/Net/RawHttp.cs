@@ -95,16 +95,32 @@ namespace Tailscale.Core.Net
             head.StatusCode = statusCode;
             head.ReasonPhrase = secondSpace < 0 ? "" : statusLine.Substring(secondSpace + 1);
 
+            string lastName = null;
+            string lastValue = null;
             while (true)
             {
                 string line = ReadLine(stream);
                 if (line == null) throw new IOException("header HTTP troncati");
                 if (line.Length == 0) break;
 
+                // Riga piegata (obs-fold, RFC 9110 5.5.2): continua l'header
+                // precedente, unita con uno spazio. Prima finiva fra le righe
+                // senza `:` e spariva, e un header lungo perdeva il seguito.
+                if (line[0] == ' ' || line[0] == '\t')
+                {
+                    if (lastName == null)
+                        throw new IOException("header HTTP malformato: continuazione senza header: " + line);
+                    lastValue = lastValue + " " + line.Trim();
+                    continue;
+                }
+
                 int colon = line.IndexOf(':');
-                if (colon <= 0) continue; // header malformato: si ignora
-                head.Add(line.Substring(0, colon).Trim(), line.Substring(colon + 1).Trim());
+                if (colon <= 0) throw new IOException("header HTTP malformato: " + line);
+                if (lastName != null) head.Add(lastName, lastValue);
+                lastName = line.Substring(0, colon).Trim();
+                lastValue = line.Substring(colon + 1).Trim();
             }
+            if (lastName != null) head.Add(lastName, lastValue);
             return head;
         }
 

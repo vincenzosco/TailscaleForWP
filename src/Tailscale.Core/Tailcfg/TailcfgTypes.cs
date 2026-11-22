@@ -315,6 +315,10 @@ namespace Tailscale.Core.Tailcfg
 
         public void BeginObject()
         {
+            // Separate() prima della parentesi, come in Raw(): un oggetto scritto
+            // dopo il primo elemento di un array deve prendere la virgola,
+            // altrimenti esce `[{...}{...}]` che non e' JSON.
+            Separate();
             _buffer.Append('{');
             _firstInScope = true;
             _depth++;
@@ -329,6 +333,9 @@ namespace Tailscale.Core.Tailcfg
 
         public void BeginArray()
         {
+            // Come BeginObject: la virgola va prima della parentesi quando il
+            // contenitore non e' il primo elemento del proprio scope.
+            Separate();
             _buffer.Append('[');
             _firstInScope = true;
             _depth++;
