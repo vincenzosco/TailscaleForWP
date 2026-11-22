@@ -10,6 +10,7 @@ Uso:
     python tools/check-no-emoji.py           # controlla (exit 1 se trova qualcosa)
     python tools/check-no-emoji.py --fix     # sostituisce le frecce e cancella le emoji
 """
+import codecs
 import os
 import re
 import sys
@@ -39,6 +40,43 @@ SKIP_DIRS = ("bin", "obj", "AppPackages", "BundleArtifacts", ".git", "tessdata",
 ROOTS = ("src", "Tailscale", "tools", "docs")
 
 
+def read_text(path):
+    """(testo, codec, bom) del file, o (None, None, None) se non decodifica.
+
+    Codifiche ammesse: utf-8 con o senza BOM, utf-16 LE o BE. Il BOM del
+    file si conserva per la riscrittura, cosi' --fix non lo strappa. Un file
+    che non decodifica non si salta in silenzio: e' proprio quello che la
+    porta non puo' controllare.
+    """
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read()
+    except IOError:
+        return None, None, None
+    for bom, codec in ((codecs.BOM_UTF8, "utf-8"),
+                       (codecs.BOM_UTF16_LE, "utf-16-le"),
+                       (codecs.BOM_UTF16_BE, "utf-16-be")):
+        if raw.startswith(bom):
+            try:
+                return raw[len(bom):].decode(codec), codec, bom
+            except UnicodeDecodeError:
+                return None, None, None
+    try:
+        return raw.decode("utf-8"), "utf-8", b""
+    except UnicodeDecodeError:
+        pass
+    # utf-16 senza BOM: lo si riconosce dai byte NUL che ogni carattere
+    # ASCII ci lascia. Senza NUL il file non e' utf-16 leggibile e la porta
+    # non puo' controllarlo.
+    codec = "utf-16-le" if sys.byteorder == "little" else "utf-16-be"
+    if b"\x00" in raw:
+        try:
+            return raw.decode(codec), codec, b""
+        except UnicodeDecodeError:
+            pass
+    return None, None, None
+
+
 def files():
     """I file da controllare: le cartelle di lavoro e quelli in radice.
 
@@ -64,12 +102,13 @@ def main():
     fix = "--fix" in sys.argv[1:]
     problems = 0
     fixed = 0
+    unreadable = 0
 
     for path in files():
-        try:
-            with open(path, "r", encoding="utf-8-sig", newline="") as handle:
-                text = handle.read()
-        except (IOError, UnicodeDecodeError):
+        text, codec, bom = read_text(path)
+        if text is None:
+            unreadable += 1
+            print("%s: codifica non riconosciuta: la porta non lo controlla" % path)
             continue
 
         original = text
@@ -85,16 +124,18 @@ def main():
         if fix:
             text = EMOJI.sub("", text)
             if text != original:
-                with open(path, "w", encoding="utf-8", newline="") as handle:
-                    handle.write(text)
+                with open(path, "wb") as handle:
+                    handle.write(bom + text.encode(codec))
                 fixed += 1
 
     if fix:
-        print("emoji controllate: %d segnalazioni, %d file modificati" % (problems, fixed))
-        return 0
+        print("emoji controllate: %d segnalazioni, %d file modificati, %d file non controllabili"
+              % (problems, fixed, unreadable))
+        return 1 if unreadable else 0
 
-    if problems:
-        print("FAIL: %d emoji o frecce decorative (usa --fix)" % problems)
+    if problems or unreadable:
+        print("FAIL: %d emoji o frecce decorative, %d file non controllabili (usa --fix)"
+              % (problems, unreadable))
         return 1
 
     print("nessuna emoji ne' freccia decorativa")
