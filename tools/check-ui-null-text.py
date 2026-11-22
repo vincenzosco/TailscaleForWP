@@ -312,7 +312,10 @@ def ternary_split(text):
 
 def non_null(expression, locals_by_name, seen):
     """Vero se l'espressione non puo' essere nulla, con il perche'."""
-    expr = expression.strip().rstrip(";").strip()
+    # La coda di commento dopo l'espressione non ne fa parte: un `engine.DeviceName;
+    # // aggiornato` deve valere come `engine.DeviceName`. Un `//` dentro un
+    # letterale non e' un commento, e strip_comments lo sa.
+    expr = strip_comments(expression).strip().rstrip(";").strip()
     if not expr:
         return False, "espressione vuota"
 
