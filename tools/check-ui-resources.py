@@ -71,7 +71,7 @@ def main():
         keys = resw_keys(path)
 
         for uid in uids:
-            candidates = [uid + ".Text", uid + ".Content", uid]
+            candidates = [uid + ".Text", uid + ".Content"]
             if not any(c in keys for c in candidates):
                 problems.append("%s: la chiave di x:Uid=\"%s\" non esiste (%s)"
                                 % (language, uid, " o ".join(candidates)))
