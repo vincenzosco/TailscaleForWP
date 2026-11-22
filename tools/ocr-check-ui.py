@@ -63,10 +63,14 @@ def normalize(text):
 
 
 def contains(haystack_words, needle):
-    """Vero se le parole della stringa attesa compaiono in ordine nell'OCR."""
+    """Vero se le parole della stringa attesa compaiono in ordine nell'OCR.
+
+    Una stringa attesa che normalizzata non ha parole (la risorsa e' vuota)
+    non e' mai contenuta: il testo manca e il controllo deve fallire.
+    """
     needle_words = normalize(needle)
     if not needle_words:
-        return True
+        return False
     index = 0
     for word in haystack_words:
         if word == needle_words[index]:
