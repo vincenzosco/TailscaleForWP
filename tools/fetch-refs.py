@@ -76,6 +76,18 @@ def _rmtree(path):
     os.rmdir(path)
 
 
+def _safe_member(name):
+    """Vero se il percorso del membro resta dentro la cartella di destinazione.
+
+    Niente percorsi assoluti, niente componenti "..", niente unita' di disco:
+    un tarball malevolo non deve scrivere fuori da refs/.
+    """
+    name = name.replace("\\", "/")
+    if name.startswith("/") or os.path.splitdrive(name)[0]:
+        return False
+    return all(part != ".." for part in name.split("/"))
+
+
 def extract(blob, dest_dir):
     if os.path.isdir(dest_dir):
         _rmtree(dest_dir)
@@ -85,6 +97,10 @@ def extract(blob, dest_dir):
             parts = member.name.split("/", 1)
             if len(parts) < 2 or not parts[1]:
                 continue
+            if not (member.isfile() or member.isdir()):
+                raise SystemExit("membro non regolare nel tarball: %s" % member.name)
+            if not _safe_member(parts[1]):
+                raise SystemExit("percorso pericoloso nel tarball: %s" % member.name)
             member.name = parts[1]
             tar.extract(member, dest_dir)
 
@@ -114,6 +130,25 @@ def write_pin(entry, dest):
     return pin.replace("\n", " ").strip()
 
 
+def pin_matches(pin, entry):
+    """Il marcatore punta esattamente questo ref? Solo uguaglianza, mai 'in'.
+
+    Un ref che condivide il prefisso con quello pinnato (v1.2 contro v1.20)
+    non e' lo stesso ref: il confronto va fatto sul campo, e su repo e tipo
+    esattamente come sono scritti nel lock.
+    """
+    lines = [line.strip() for line in pin.splitlines() if line.strip()]
+    if not lines or lines[0] != entry["repo"]:
+        return False
+    for line in lines:
+        if line.startswith("ref="):
+            ref, sep, kind = line[len("ref="):].strip().partition(" (")
+            return (bool(sep) and kind.endswith(")")
+                    and ref == entry["ref"]
+                    and kind[:-1] == entry.get("kind", "tag"))
+    return False
+
+
 def main(argv):
     update = "--update" in argv
     check_only = "--check" in argv
@@ -137,7 +172,7 @@ def main(argv):
         present = os.path.isdir(dest) and os.path.exists(marker)
         if present:
             with open(marker, "r", encoding="utf-8") as fh:
-                if entry["ref"] in fh.read():
+                if pin_matches(fh.read(), entry):
                     print("[ok]   %s@%s" % (entry["repo"], entry["ref"]))
                     continue
         if check_only:
@@ -158,10 +193,11 @@ def main(argv):
         print("       %d byte in %s" % (len(blob), os.path.relpath(dest, ROOT)))
 
     save_lock(lock)
-    for entry in lock["refs"]:
-        dest = dest_of(entry)
-        if os.path.isdir(dest):
-            print("       " + write_pin(entry, dest))
+    if not check_only:
+        for entry in lock["refs"]:
+            dest = dest_of(entry)
+            if os.path.isdir(dest):
+                print("       " + write_pin(entry, dest))
 
     if failed:
         return 1
