@@ -756,6 +756,9 @@ namespace Tailscale.Core.Control
                 catch (Exception ex)
                 {
                     _options.Log.Log("riconnessione fallita: " + ex.Message);
+                    // Il prossimo giro non avrebbe canale: si salta al tentativo
+                    // dopo, dove il budget conta i guasti veri.
+                    continue;
                 }
             }
         }
@@ -816,6 +819,11 @@ namespace Tailscale.Core.Control
         /// </summary>
         private bool ReadMapOnce()
         {
+            // Senza canale non c'e' nulla da leggere: succede dopo una
+            // riconnessione fallita, e un giro a vuoto e' meglio di un
+            // NullReference che il chiamante leggerebbe come guasto dello stream.
+            if (_connection == null) return false;
+
             MapRequest request = new MapRequest();
             request.Version = _options.Version;
             request.NodeKey = _options.NodeKey.ToString();
@@ -898,7 +906,13 @@ namespace Tailscale.Core.Control
                     _status.LoginUrl = null;
                     SaveAuthUrl(null);
                 }
-                if (loginUrl != null) _status.LoginUrl = loginUrl;
+                if (loginUrl != null)
+                {
+                    // Un URL nuovo non ha ancora aperto il browser: se il flag
+                    // restasse quello vecchio, il link nuovo non partirebbe mai.
+                    if (loginUrl != _status.LoginUrl) _status.BrowserOpened = false;
+                    _status.LoginUrl = loginUrl;
+                }
             }
 
             if (notify) NotifyStatusChanged();
@@ -969,6 +983,9 @@ namespace Tailscale.Core.Control
                              + ": ricarico le chiavi e rifaccio l'handshake");
             try
             {
+                // Le chiavi in memoria sono quelle che il server ha rifiutato:
+                // dimenticarle forza il ricaricamento prima del dial di ritorno.
+                _serverKeys = null;
                 DisposeConnection();
                 return true;
             }

@@ -25,6 +25,7 @@ namespace Tailscale.Core.Tests
             Case("login in sospeso: identita' conservata", PendingLoginKeepsIdentity);
             Case("stato avvelenato: identita' rigenerata", PoisonedStateRegeneratesEverything);
             Case("login senza browser", NeedLoginSurvivesWithoutBrowser);
+            Case("URL di login nuovo: il browser si riapre", NewAuthUrlReopensTheBrowser);
             Case("corpo UTF-8", BodyKeepsAccents);
             Case("errore duplicato: recupero", RecoversFromDuplicateIdentityError);
             Case("errore duplicato su non-200", RecoversFromDuplicateOnNonSuccess);
@@ -40,6 +41,7 @@ namespace Tailscale.Core.Tests
             Case("primo tentativo scaduto: si ritenta", AFirstAttemptThatTimesOutIsRetried);
             Case("arresto durante una scadenza: non e' un errore", StoppingDuringADeadlineIsNotAnError);
             Case("netmap mai arrivata: si smette con un errore", MapNeverArrivesGivesUpWithAnError);
+            Case("riconnessione fallita: nessun giro senza canale", ReconnectFailureSkipsTheMapTurn);
             Case("ciclo uscito da solo: il canale viene chiuso", ChannelIsReleasedWhenTheCycleGivesUp);
             Case("netmap persa dopo l'arrivo: si ritenta senza cancellare", MapDropsAfterItArrivedKeepsRetrying);
         }
@@ -194,6 +196,48 @@ namespace Tailscale.Core.Tests
             List<string> again;
             Run(store, authorized, null, out again);
             T.Eq(null, store.Read("authUrl"), "autorizzato: l'URL viene dimenticato");
+        }
+
+        /// <summary>
+        /// Un AuthURL diverso e' un invito nuovo: il browser deve riaprirsi. Il flag
+        /// dell'apertura vale per l'URL che l'ha causato, non per tutti i login della
+        /// stessa esecuzione: se restasse appiccicato, il secondo link non partirebbe
+        /// mai e l'utente non saprebbe di doverlo aprire a mano.
+        /// </summary>
+        private static void NewAuthUrlReopensTheBrowser()
+        {
+            MemoryStateStore store = new MemoryStateStore();
+            Script script = new Script();
+            script.Enqueue(200, "{\"AuthURL\":\"https://login.tailscale.com/a/xyz\",\"MachineAuthorized\":false}");
+            script.Enqueue(200, "{\"AuthURL\":\"https://login.tailscale.com/a/abc\",\"MachineAuthorized\":false}");
+
+            List<string> opened = new List<string>();
+            ControlClientOptions options = Options(store, new FakeConnection());
+            options.LoginTimeoutSeconds = 6;
+            options.ConnectionFactory = delegate() { return new ScriptedConnection(script); };
+            options.BrowserOpener = delegate(string url)
+            {
+                opened.Add(url);
+                return true;   // il browser si apre
+            };
+
+            // Il login si esaurisce da solo (la finestra di pazienza), ma il tetto
+            // di attese garantisce che il test finisca comunque.
+            ControlClient[] holder = new ControlClient[1];
+            int sleeps = 0;
+            options.Sleep = delegate(int milliseconds)
+            {
+                sleeps++;
+                if (sleeps > 20 && holder[0] != null) holder[0].Stop();
+            };
+
+            ControlClient client = new ControlClient(options);
+            holder[0] = client;
+            client.Start();
+
+            T.Eq(2, opened.Count, "URL nuovo: il browser si apre una volta per URL");
+            T.Eq("https://login.tailscale.com/a/xyz", opened[0], "URL nuovo: prima il link vecchio");
+            T.Eq("https://login.tailscale.com/a/abc", opened[1], "URL nuovo: poi il link nuovo");
         }
 
         private static void BodyKeepsAccents()
@@ -501,6 +545,45 @@ namespace Tailscale.Core.Tests
                    "netmap mai arrivata: il messaggio dice che il motore si puo' riavviare");
             T.True((client.Status.ErrorMessage ?? "").IndexOf("nuovo tentativo fra poco", StringComparison.Ordinal) < 0,
                    "netmap mai arrivata: e non promette un tentativo che nessuno fa");
+        }
+
+        /// <summary>
+        /// Dopo una riconnessione fallita non c'e' nessun canale: il giro di map
+        /// dopo deve saltare e lasciare che sia il guasto di riconnessione a
+        /// consumare il budget, non un NullReference scambiato per guasto dello
+        /// stream, che riempiva il registro di messaggi che non c'entravano.
+        /// </summary>
+        private static void ReconnectFailureSkipsTheMapTurn()
+        {
+            MemoryStateStore store = new MemoryStateStore();
+            FakeConnection connection = new FakeConnection();
+            connection.RegisterBody = AuthorizedResponse();
+            // Segnato rotto da subito: il primo giro di map lo usa, poi il client
+            // prova a rifarlo e il dial di ritorno fallisce.
+            connection.Broken = true;
+
+            List<string> captured = new List<string>();
+            ControlClientOptions options = Options(store, connection);
+            options.Log = new DelegateLogSink(captured.Add);
+            options.MaxChannelRetries = 1;
+            options.Sleep = delegate(int milliseconds) { };
+            int dials = 0;
+            options.ConnectionFactory = delegate()
+            {
+                dials++;
+                if (dials > 1) throw new IOException("dial impossibile");
+                return connection;
+            };
+
+            ControlClient client = new ControlClient(options);
+            client.Start();
+
+            T.True(HasLine(captured, "riconnessione fallita"),
+                   "canale assente: il guasto di riconnessione e' quello che si vede");
+            T.False(HasLine(captured, "stream della netmap interrotto"),
+                    "canale assente: nessun giro di map senza canale");
+            T.Eq(ControlState.Error.ToString(), client.Status.State.ToString(),
+                 "canale assente: il budget si esaurisce con l'errore giusto");
         }
 
         /// <summary>
