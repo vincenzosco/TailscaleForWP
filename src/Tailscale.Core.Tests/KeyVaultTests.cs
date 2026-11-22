@@ -23,6 +23,7 @@ namespace Tailscale.Core.Tests
         {
             Case("portachiavi: scrittura e rilettura", AKeySurvivesTheVaultRoundTrip);
             Case("portachiavi rotto: la verifica lo dice e non perde la chiave", AVerifiedVaultKeepsTheOldKey);
+            Case("portachiavi che si rompe durante la prova: la chiave di prima resta", AFailingVaultKeepsTheOldKey);
             Case("portachiavi sano: la verifica restituisce la chiave di prima", AHealthyVaultKeepsTheOldKey);
             Case("stato: la chiave macchina non finisce nelle impostazioni", TheMachineKeyNeverReachesTheSettings);
         }
@@ -70,6 +71,21 @@ namespace Tailscale.Core.Tests
                    "portachiavi rotto: il registro dice cosa non torna");
             T.Eq(T.ToHex(original.PrivateKey), T.ToHex(store.Load().PrivateKey),
                  "portachiavi rotto: la chiave di prima e' ancora quella leggibile");
+        }
+
+        private static void AFailingVaultKeepsTheOldKey()
+        {
+            List<string> lines = new List<string>();
+            KeyPair original = KeyPair.Generate(new TestRandomSource(7));
+            FailingReadKeyVault vault = new FailingReadKeyVault(original);
+            MachineKeyStore store = new MachineKeyStore(vault, new DelegateLogSink(lines.Add));
+
+            T.False(store.Verify(new TestRandomSource(8)),
+                    "portachiavi che si rompe: la verifica fallisce");
+            T.True(HasLine(lines, "verifica fallita"),
+                   "portachiavi che si rompe: il registro dice che la verifica e' saltata");
+            T.Eq(T.ToHex(original.PrivateKey), T.ToHex(vault.Stored.PrivateKey),
+                 "portachiavi che si rompe: la chiave di prova non resta al posto di quella vera");
         }
 
         private static void AHealthyVaultKeepsTheOldKey()
@@ -166,6 +182,32 @@ namespace Tailscale.Core.Tests
             }
 
             public void Delete(string name) { _values.Remove(name); }
+        }
+
+        /// <summary>
+        /// Un portachiavi che si rompe a meta' della prova: la prima lettura serve,
+        /// la rilettura della chiave di prova salta per un'eccezione — il guasto
+        /// vero, visto sul campo, e' un'eccezione DOPO il salvataggio della prova.
+        /// La chiave di prova non deve restare al posto di quella vera.
+        /// </summary>
+        private sealed class FailingReadKeyVault : IKeyVault
+        {
+            private int _loads;
+
+            public KeyPair Stored;
+
+            public FailingReadKeyVault(KeyPair initial) { Stored = initial; }
+
+            public void Save(KeyPair pair) { Stored = pair; }
+
+            public KeyPair Load()
+            {
+                _loads++;
+                if (_loads > 1) throw new InvalidOperationException("il portachiavi non rilegge piu'");
+                return Stored;
+            }
+
+            public void Clear() { Stored = null; }
         }
 
         /// <summary>

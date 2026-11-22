@@ -56,28 +56,44 @@ namespace Tailscale.Core
         {
             if (random == null) throw new ArgumentNullException("random");
 
+            KeyPair current = null;
+            bool probing = false;
             try
             {
                 KeyPair probe = KeyPair.Generate(random);
-                KeyPair current = Load();
+                current = Load();
+                probing = true;
                 Save(probe);
                 KeyPair back = Load();
                 if (back == null || !SameKey(probe, back))
                 {
-                    if (current != null) Save(current);
+                    Restore(current);
                     _log.Log("portachiavi: la chiave scritta non si rilegge identica");
                     return false;
                 }
 
-                if (current != null) Save(current); else Clear();
+                Restore(current);
                 _log.Log("portachiavi: scrittura e rilettura verificate");
                 return true;
             }
             catch (Exception ex)
             {
+                // La chiave di prima viene rimessa comunque: un guasto durante la
+                // prova non deve lasciare la chiave di prova al posto di quella
+                // vera. Il ripristino non puo' fermare il log del guasto.
+                try { if (probing) Restore(current); }
+                catch (Exception) { }
                 _log.Log("portachiavi: verifica fallita (" + ex.GetType().Name + "): " + ex.Message);
                 return false;
             }
+        }
+
+        /// <summary>
+        /// Rimette la chiave di prima — o l'assenza di chiave, al primo avvio.
+        /// </summary>
+        private void Restore(KeyPair current)
+        {
+            if (current != null) Save(current); else Clear();
         }
 
         private static bool SameKey(KeyPair a, KeyPair b)
