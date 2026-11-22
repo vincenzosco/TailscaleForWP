@@ -128,6 +128,17 @@ ISETool.exe ts xd 563a8f70-0e06-4690-b075-3963581a75c8 C:\temp\registro
 
 `ISETool.exe` lives in `C:\Program Files (x86)\Microsoft SDKs\Windows Phone\v8.1\Tools\IsolatedStorageExplorerTool\`. The first command is a connected phone, the second the default emulator.
 
+**The VPN link via interop.** On an interop-unlocked phone the app can add and
+switch a system connection by itself: one tap on the page, or automatically when
+the engine connects. The status line is read back from the registry, so
+"connected" means the values are really there, and every previous value is backed
+up before anything is written. What gets written is decided by `vpn-manifest.txt`
+in the app folder (or by the built-in manifest, which only touches
+`HKLM\SOFTWARE\TailscaleWP`), and the same manifest generates the
+`provision.bat` payload for CMD Injector: see
+[provisioning/README.md](provisioning/README.md). The registry does not create a
+tunnel: it stores configuration and points the system connection, nothing more.
+
 ## Troubleshooting
 
 <details>
@@ -323,6 +334,18 @@ ISETool.exe ts xd 563a8f70-0e06-4690-b075-3963581a75c8 C:\temp\registro
 ```
 
 `ISETool.exe` sta in `C:\Program Files (x86)\Microsoft SDKs\Windows Phone\v8.1\Tools\IsolatedStorageExplorerTool\`. Il primo comando è per il telefono collegato, il secondo per l'emulatore predefinito.
+
+**Il collegamento VPN via interop.** Su un telefono con interop unlock l'app sa
+aggiungere e attivare un collegamento di sistema da sola: un tocco sulla pagina,
+oppure in automatico quando il motore si collega. La riga di stato viene riletta
+dal registro, quindi "collegata" significa che i valori ci sono davvero, e ogni
+valore precedente viene salvato prima di scrivere. Cosa si scrive lo decide
+`vpn-manifest.txt` nella cartella dell'app (oppure il manifest integrato, che
+tocca solo `HKLM\SOFTWARE\TailscaleWP`), e lo stesso manifest genera il payload
+`provision.bat` per CMD Injector: vedi
+[provisioning/README.md](provisioning/README.md). Il registro non crea alcun
+tunnel: conserva la configurazione e punta il collegamento di sistema, niente di
+più.
 
 ## Se qualcosa non va
 
