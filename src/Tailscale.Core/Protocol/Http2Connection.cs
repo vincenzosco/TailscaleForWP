@@ -312,6 +312,17 @@ namespace Tailscale.Core.Protocol
 
         private void Dispatch(Http2Frame frame, StreamState state)
         {
+            // I frame di uno stream abbandonato si smaltiscono sul suo stato
+            // invece di essere ignorati: i DATA scartano il corpo ma riaccreditano
+            // la finestra della connessione, e i blocchi di header si decodificano
+            // lo stesso per non perdere la sincronia della tabella HPACK.
+            if (frame.StreamId != state.Id && frame.StreamId != 0)
+            {
+                StreamState abandoned;
+                if (_streams.TryGetValue(frame.StreamId, out abandoned) && abandoned.Abandoned)
+                    state = abandoned;
+            }
+
             switch (frame.Type)
             {
                 case Http2FrameType.Settings:
@@ -360,6 +371,12 @@ namespace Tailscale.Core.Protocol
 
                 case Http2FrameType.RstStream:
                     if (frame.StreamId != state.Id) return;
+                    if (state.Abandoned)
+                    {
+                        // Conferma del nostro RST: non e' un guasto del server.
+                        _log.Log("http2: RST sullo stream " + frame.StreamId + " gia' resettato, ignorato");
+                        return;
+                    }
                     throw new Http2Exception("RST_STREAM dal server sullo stream " + frame.StreamId
                         + ": codice " + frame.ReadRstStreamErrorCode());
 
@@ -466,6 +483,17 @@ namespace Tailscale.Core.Protocol
 
         private void HandleData(Http2Frame frame, StreamState state)
         {
+            if (state.Abandoned)
+            {
+                // Scarto esplicito del corpo che nessuno leggera': il payload
+                // intero conta nella finestra (RFC 9113 §6.9.1) e va riaccreditato
+                // alla connessione, altrimenti i byte di questo stream
+                // riempirebbero la finestra condivisa e tutto si bloccherebbe.
+                if (frame.Has(Http2Frame.FlagEndStream)) state.Ended = true;
+                CreditConnection(frame.Payload.Length);
+                return;
+            }
+
             if (frame.Has(Http2Frame.FlagEndStream))
             {
                 // Un DATA vuoto con END_STREAM chiude soltanto.
@@ -561,11 +589,101 @@ namespace Tailscale.Core.Protocol
             _log.Log("http2: -> WINDOW_UPDATE di " + increment + " byte (stream " + state.Id + ")");
         }
 
+        /// <summary>Riaccredita alla sola finestra di connessione un incremento.</summary>
+        private void CreditConnection(int increment)
+        {
+            if (increment <= 0) return;
+
+            byte[] update = new byte[4];
+            WriteUInt32(update, 0, increment);
+            lock (_writeGate)
+            {
+                WriteFrame(new Http2Frame(Http2FrameType.WindowUpdate, 0, 0, update));
+            }
+            _log.Log("http2: -> WINDOW_UPDATE di " + increment + " byte (connessione)");
+        }
+
+        /// <summary>
+        /// A fine stream rende alla finestra di connessione la coda rimasta sotto
+        /// la soglia: non andra' piu' consumata nulla, e senza questo passo ogni
+        /// risposta lascerebbe indietro i suoi byte e la finestra condivisa si
+        /// stringerebbe fino a bloccare il server.
+        /// </summary>
+        private void FlushStreamCredit(StreamState state)
+        {
+            if (state.ConsumedSinceCredit <= 0) return;
+            int increment = state.ConsumedSinceCredit;
+            state.ConsumedSinceCredit = 0;
+
+            // Solo la finestra di connessione: lo stream e' chiuso e la sua
+            // finestra muore con lui.
+            CreditConnection(increment);
+        }
+
+        /// <summary>
+        /// Chiude uno stream di risposta abbandonato a meta' del corpo (il
+        /// chiamante ha smesso di leggere, per esempio per un errore di parse):
+        /// manda RST_STREAM e rende alla finestra di connessione i byte che
+        /// nessuno consumera'. Senza, i DATA che il server manda ancora
+        /// riempirebbero la finestra condivisa e ogni richiesta successiva si
+        /// bloccherebbe.
+        /// </summary>
+        internal void AbandonStream(StreamState state)
+        {
+            if (state.Abandoned) return;
+            state.Abandoned = true;
+
+            // Credito perso: consumato ma non accreditato, piu' il corpo rimasto
+            // nel buffer che nessuno leggera'. Lo stream muore qui, quindi conta
+            // solo la finestra della connessione.
+            int leftover = state.ConsumedSinceCredit + (state.Buffer.Length - state.Offset);
+            state.ConsumedSinceCredit = 0;
+            state.Offset = state.Buffer.Length;
+
+            try
+            {
+                lock (_writeGate)
+                {
+                    if (!state.Ended)
+                    {
+                        // CANCEL (RFC 9113 §7): e' il segnale che fa smettere il
+                        // server; i DATA gia' in volo si scartano in lettura.
+                        byte[] code = new byte[4];
+                        WriteUInt32(code, 0, 8);
+                        WriteFrame(new Http2Frame(Http2FrameType.RstStream, 0, state.Id, code));
+                    }
+
+                    if (leftover > 0)
+                    {
+                        byte[] update = new byte[4];
+                        WriteUInt32(update, 0, leftover);
+                        WriteFrame(new Http2Frame(Http2FrameType.WindowUpdate, 0, 0, update));
+                    }
+                }
+                if (leftover > 0)
+                    _log.Log("http2: -> WINDOW_UPDATE di " + leftover
+                             + " byte (connessione, stream " + state.Id + " abbandonato)");
+            }
+            catch (Exception ex)
+            {
+                // In chiusura non si lancia: il canale e' spesso gia' rotto, e
+                // coprire l'errore originale peggiorerebbe solo la diagnosi.
+                _log.Log("http2: chiusura dello stream " + state.Id + " incompleta: " + ex.Message);
+            }
+        }
+
         internal int ReadFromStream(StreamState state, byte[] buffer, int offset, int count)
         {
             while (state.Offset >= state.Buffer.Length)
             {
-                if (state.Ended) return 0;
+                if (state.Ended)
+                {
+                    // Fine del corpo: la coda rimasta sotto la soglia non andra'
+                    // piu' consumata, e senza restituirla qui ogni risposta
+                    // stringerebbe per sempre la finestra della connessione.
+                    FlushStreamCredit(state);
+                    return 0;
+                }
                 PumpForData(state);
             }
 
@@ -631,6 +749,9 @@ namespace Tailscale.Core.Protocol
             /// <summary>Byte consumati dal lettore e non ancora accreditati al server.</summary>
             public int ConsumedSinceCredit;
 
+            /// <summary>Vero quando lo stream e' stato abbandonato e resettato.</summary>
+            public bool Abandoned;
+
             public byte[] PartialHeaderBlock;
 
             /// <summary>
@@ -690,6 +811,12 @@ namespace Tailscale.Core.Protocol
 
         protected override void Dispose(bool disposing)
         {
+            if (disposing && !_disposed)
+            {
+                // Uno stream lasciato a meta' del corpo va resettato: senza RST e
+                // senza riaccredito i suoi DATA riempiono la finestra condivisa.
+                _connection.AbandonStream(_state);
+            }
             _disposed = true;
             base.Dispose(disposing);
         }

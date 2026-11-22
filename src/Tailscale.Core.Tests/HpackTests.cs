@@ -119,6 +119,7 @@ namespace Tailscale.Core.Tests
             RejectsIndexZero();
             RejectsBadHuffmanPadding();
             RejectsOverlongInteger();
+            RejectsOversizedStringLength();
         }
 
         private static void DecodesRequestBlock()
@@ -324,6 +325,26 @@ namespace Tailscale.Core.Tests
                 rejectedAsHpack = true;
             }
             T.True(rejectedAsHpack, "intero oltre il range: rifiutato come errore di codifica HPACK");
+        }
+
+        private static void RejectsOversizedStringLength()
+        {
+            // 00 = campo letterale con nome nuovo; 7f 80 ff ff ff 07 e' una
+            // lunghezza di int.MaxValue byte. position + length sborda e il
+            // controllo passerebbe: partirebbe un'allocazione da due giga prima
+            // di qualunque copia, invece dell'errore di codifica atteso.
+            HpackDecoder decoder = new HpackDecoder(NullLogSink.Instance);
+
+            bool rejectedAsHpack = false;
+            try
+            {
+                decoder.Decode(T.FromHex("007f80ffffff07"));
+            }
+            catch (HpackException)
+            {
+                rejectedAsHpack = true;
+            }
+            T.True(rejectedAsHpack, "stringa da int.MaxValue byte: rifiutata come errore di codifica HPACK");
         }
 
         private static void RejectsIndexZero()

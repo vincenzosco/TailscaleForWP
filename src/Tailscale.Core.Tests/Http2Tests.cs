@@ -30,6 +30,7 @@ namespace Tailscale.Core.Tests
             Case("continuation + END_STREAM", ContinuationKeepsEndStream);
             Case("stream senza fine", StreamsWithoutWaitingForEnd);
             Case("finestra", SendsAckWindowUpdatesAndPing);
+            Case("stream abbandonato", AbandonedStreamIsResetAndCredited);
             Case("goaway", GoAwayIsAnError);
             Case("frame troppo grande", RejectsOversizedFrame);
             Case("early payload dopo la prefazione", EarlyPayloadComesAfterThePreface);
@@ -454,11 +455,55 @@ namespace Tailscale.Core.Tests
             T.True(ping != null, "finestra: PING confermato con ACK");
             T.Eq("0102030405060708", T.ToHex(ping.Payload), "finestra: il PING riporta lo stesso payload");
             // Il credito torna a blocchi da 32 KB man mano che il chiamante
-            // consuma: 32768 dopo i primi due DATA, e i 7232 rimanenti non
-            // arrivano alla soglia (la finestra non e' in sofferenza, quindi non
-            // serve altro credito). Mai piu' dei byte consumati.
+            // consuma: 32768 dopo i primi due DATA. I 7232 rimanenti non
+            // arrivano alla soglia ma tornano alla finestra della connessione
+            // quando lo stream finisce. Mai piu' dei byte consumati.
             T.True(credited >= 32768 && credited <= 40000,
                    "finestra: credito fra 32768 e i 40000 byte consumati (era " + credited + ")");
+            T.True(HasCredit(frames, 0, 40000 - 32768),
+                   "finestra: la coda di 7232 byte torna alla finestra della connessione");
+        }
+
+        private static void AbandonedStreamIsResetAndCredited()
+        {
+            // Un errore del chiamante sul corpo (il parse della netmap) abbandona
+            // lo stream a meta': senza RST_STREAM e senza riaccredito i DATA che
+            // il server manda ancora riempiono la finestra condivisa e bloccano
+            // la connessione. Qui si consumano 2 byte di "ciao" e poi si abbandona.
+            ScriptedStream stream = new ScriptedStream();
+            stream.Script(ServerSettings());
+            stream.Script(ResponseHeaders(0x4, ":status", "200", "content-type", "application/json"));
+            stream.Script(Data("ciao", false));
+            // In volo dopo l'abbandono: 100 byte sullo stream 1, poi la risposta
+            // successiva sullo stream 3.
+            byte[] late = new byte[100];
+            for (int i = 0; i < late.Length; i++) late[i] = (byte)'x';
+            stream.Script(new Http2Frame(Http2FrameType.Data, 0, 1, late).ToBytes());
+            stream.Script(new Http2Frame(Http2FrameType.Headers,
+                Http2Frame.FlagEndHeaders, 3, HeaderBlock(":status", "200")).ToBytes());
+            stream.Script(new Http2Frame(Http2FrameType.Data, Http2Frame.FlagEndStream, 3, new byte[0]).ToBytes());
+
+            Http2Connection connection = new Http2Connection(stream, NullLogSink.Instance);
+            Http2Response first = connection.Post("/machine/map", T.FromHex("7b7d"),
+                new List<KeyValuePair<string, string>>());
+            byte[] buffer = new byte[2];
+            T.Eq(2, first.Body.Read(buffer, 0, 2), "abbandono: due byte consumati");
+            first.Body.Dispose();
+
+            List<Http2Frame> frames = ParseWritten(stream, 24);
+            Http2Frame rst = Find(frames, Http2FrameType.RstStream);
+            T.True(rst != null, "abbandono: RST_STREAM mandato sullo stream abbandonato");
+            if (rst != null) T.Eq(1, rst.StreamId, "abbandono: RST sullo stream giusto");
+            // I 2 byte consumati ma non accreditati piu' i 2 rimasti nel buffer.
+            T.True(HasCredit(frames, 0, 4), "abbandono: i 4 byte persi tornano alla finestra");
+
+            // La connessione resta usabile: i DATA dello stream 1 arrivati dopo
+            // si scartano ma riaccreditano, e la risposta successiva arriva.
+            Http2Response second = connection.Post("/machine/map", T.FromHex("7b7d"),
+                new List<KeyValuePair<string, string>>());
+            T.Eq(200, second.StatusCode, "abbandono: la connessione resta usabile");
+            T.True(HasCredit(ParseWritten(stream, 24), 0, 100),
+                   "abbandono: i DATA scartati riaccreditano la connessione");
         }
 
         private static void GoAwayIsAnError()
@@ -560,6 +605,17 @@ namespace Tailscale.Core.Tests
                 if (frames[i].Type == type) return frames[i];
             }
             return null;
+        }
+
+        private static bool HasCredit(List<Http2Frame> frames, int streamId, int increment)
+        {
+            for (int i = 0; i < frames.Count; i++)
+            {
+                if (frames[i].Type == Http2FrameType.WindowUpdate && frames[i].StreamId == streamId
+                    && frames[i].ReadWindowUpdateIncrement() == increment)
+                    return true;
+            }
+            return false;
         }
 
         private static string HeaderValue(List<HpackHeader> headers, string name)

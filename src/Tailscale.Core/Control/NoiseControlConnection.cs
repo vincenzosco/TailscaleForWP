@@ -185,24 +185,35 @@ namespace Tailscale.Core.Control
             Stream stream = response.Body;
             int messages = 0;
 
-            using (Watchdog watchdog = new Watchdog(this, watchdogSeconds, "la netmap", true))
+            try
             {
-                while (true)
+                using (Watchdog watchdog = new Watchdog(this, watchdogSeconds, "la netmap", true))
                 {
-                    byte[] message = ReadMapMessage(stream, messages);
-                    if (message == null) break;
+                    while (true)
+                    {
+                        byte[] message = ReadMapMessage(stream, messages);
+                        if (message == null) break;
 
-                    watchdog.KeepAlive();
-                    messages++;
+                        watchdog.KeepAlive();
+                        messages++;
 
-                    // UTF-8: i messaggi sono JSON, e un nome di peer con accenti
-                    // sono due byte per carattere.
-                    //
-                    // L'ultimo passo resta fuori dalla lettura protetta: un errore
-                    // del chiamante sui dati non e' un guasto del canale, e non deve
-                    // sembrare tale.
-                    onJson(Text.FromUtf8(message));
+                        // UTF-8: i messaggi sono JSON, e un nome di peer con accenti
+                        // sono due byte per carattere.
+                        //
+                        // L'ultimo passo resta fuori dalla lettura protetta: un errore
+                        // del chiamante sui dati non e' un guasto del canale, e non deve
+                        // sembrare tale.
+                        onJson(Text.FromUtf8(message));
+                    }
                 }
+            }
+            finally
+            {
+                // Un errore del chiamante (il parse) abbandona lo stream a meta'
+                // del corpo: chiuderlo qui manda l'RST_STREAM e riaccredita la
+                // finestra, altrimenti i DATA che arrivano ancora la riempiono e
+                // bloccano la connessione per le richieste successive.
+                stream.Dispose();
             }
 
             _log.Log("stream della netmap terminato (" + messages + " messaggi)");

@@ -249,7 +249,10 @@ namespace Tailscale.Core.Protocol
             bool huffman = (block[position] & 0x80) != 0;
             int length = ReadInteger(block, ref position, 7);
 
-            if (length < 0 || position + length > block.Length)
+            // Il confronto e' senza somma: position + length sborda int per una
+            // lunghezza vicina a int.MaxValue, il controllo passerebbe e
+            // l'allocazione da due giga partirebbe prima di qualunque copia.
+            if (length < 0 || length > block.Length - position)
                 throw new HpackException("stringa HPACK di " + length + " byte oltre il blocco ("
                     + (block.Length - position) + " disponibili)");
 
