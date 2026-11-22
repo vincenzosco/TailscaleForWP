@@ -28,9 +28,11 @@ namespace Tailscale.Core.Tests
             Case("vpn: disconnect disattiva e lo stato si rilegge", DisconnectDeactivates);
             Case("vpn: niente valori, niente stato attivo", WithoutValuesNothingIsOn);
             Case("vpn: revert ripristina valori e assenze", RevertRestoresValuesAndAbsences);
+            Case("vpn: revert continua anche su una voce illeggibile", RevertContinuesPastABadEntry);
             Case("payload: backup prima, scrittura, verifica dopo", PayloadBacksUpBeforeWriting);
             Case("payload: nomi con spazi e nomi che iniziano come un altro", PayloadSplitsNamesWithSpaces);
             Case("payload: deprovision ripristina dal backup", DeprovisionRestoresFromBackup);
+            Case("payload: %% raddoppiate, virgolette rifiutate alla generazione", PayloadDoublesPercentsAndRefusesQuotes);
         }
 
         private static void Case(string name, Action test)
@@ -168,6 +170,28 @@ namespace Tailscale.Core.Tests
                    "vpn: il backup si svuota dopo il ripristino");
         }
 
+        private static void RevertContinuesPastABadEntry()
+        {
+            FakeRegistry registry = new FakeRegistry();
+            registry.Write("HKLM", "SOFTWARE\\TailscaleWP", "VpnProfile", new RegValue(RegValue.Sz, "vecchio"));
+            registry.Write("HKLM", "SOFTWARE\\TailscaleWP", "VpnLink", new RegValue(RegValue.Sz, "vecchio"));
+            MemoryStateStore backup = new MemoryStateStore();
+            VpnLink link = NewLink(registry, backup);
+
+            link.Connect();
+            // La prima voce del piano resta illeggibile: il ripristino non si
+            // deve fermare e lasciare le altre a meta'.
+            backup.Write("vpn.bak.HKLM\\SOFTWARE\\TailscaleWP\\VpnProfile", "junk:x");
+            link.Revert();
+
+            T.Eq("vecchio", registry.Read("HKLM", "SOFTWARE\\TailscaleWP", "VpnLink").Text,
+                 "vpn: la voce dopo quella illeggibile si ripristina lo stesso");
+            T.Eq("interop", registry.Read("HKLM", "SOFTWARE\\TailscaleWP", "VpnProfile").Text,
+                 "vpn: la voce illeggibile non si tocca");
+            T.True(backup.Read("vpn.bak.HKLM\\SOFTWARE\\TailscaleWP\\VpnProfile") != null,
+                   "vpn: la voce illeggibile resta nel backup per un secondo tentativo");
+        }
+
         private static void PayloadBacksUpBeforeWriting()
         {
             InteropPlan plan = InteropManifest.Parse(InteropManifest.Default);
@@ -221,12 +245,44 @@ namespace Tailscale.Core.Tests
             InteropPlan plan = InteropManifest.Parse(InteropManifest.Default);
             string batch = ProvisionPayload.GenerateDeprovision(plan, "20261013-120000");
 
-            T.True(batch.Contains(":restore"), "payload: il ripristino e' un blocco proprio");
             T.True(batch.Contains("reg delete"), "payload: le assenze si cancellano");
             T.True(batch.Contains("backup-20261013-120000.txt"),
                    "payload: il deprovision legge il backup del provision");
             T.True(batch.Contains("interrotto a meta'"),
                    "payload: il deprovision dice che regge anche a un provisioning interrotto");
+            T.False(batch.Contains("call :restore"),
+                    "payload: il dato del backup non passa da call, dove si riespanderebbe");
+            T.False(batch.Contains("%VAL%"),
+                    "payload: il dato del backup non passa da variabili di ambiente");
+            T.True(batch.Contains("/t REG_SZ /f /d \"%%L\""),
+                   "payload: il dato sz arriva a reg add come variabile del for");
+            T.True(batch.Contains("delims=:\" %%K in (\"%%D\")"),
+                   "payload: il tipo si stacca dal dato senza esporre il contenuto");
+        }
+
+        private static void PayloadDoublesPercentsAndRefusesQuotes()
+        {
+            InteropPlan plan = new InteropPlan();
+            plan.On.Add(new RegistryEntry("HKLM", "SOFTWARE\\TailscaleWP", "A",
+                                          new RegValue(RegValue.Sz, "100% x%y%z")));
+            string batch = ProvisionPayload.Generate(plan, "20261013-120000");
+            T.True(batch.Contains("/d \"100%% x%%y%%z\""),
+                   "payload: nel batch il testo si scrive con le % raddoppiate");
+
+            string caught = null;
+            try
+            {
+                plan = new InteropPlan();
+                plan.On.Add(new RegistryEntry("HKLM", "SOFTWARE\\TailscaleWP", "A",
+                                              new RegValue(RegValue.Sz, "q\"r")));
+                ProvisionPayload.Generate(plan, "20261013-120000");
+            }
+            catch (ArgumentException ex) { caught = ex.Message; }
+            T.True(caught != null, "payload: un dato con virgolette non genera il batch");
+            T.True(caught != null && caught.IndexOf("A") >= 0,
+                   "payload: il rifiuto nomina la voce");
+            T.True(caught == null || caught.IndexOf("q\"r") < 0,
+                   "payload: il rifiuto non espone il valore");
         }
     }
 

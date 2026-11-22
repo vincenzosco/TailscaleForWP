@@ -64,7 +64,13 @@ namespace Tailscale.Core
         {
             if (field == null) throw new ArgumentNullException("field");
             int colon = field.IndexOf(':');
-            if (colon <= 0 || colon == field.Length - 1)
+            if (colon <= 0)
+                throw new FormatException("valore atteso nella forma tipo:testo, trovato: " + field);
+            // "sz:" e' il testo vuoto: ToString() lo produce e Parse deve
+            // restituirlo identico, o un ripristino con un valore vuoto salta
+            // con un'eccezione a meta' del lavoro.
+            if (colon == field.Length - 1
+                && !field.Substring(0, colon).Trim().Equals(Sz, StringComparison.OrdinalIgnoreCase))
                 throw new FormatException("valore atteso nella forma tipo:testo, trovato: " + field);
             return new RegValue(field.Substring(0, colon), field.Substring(colon + 1));
         }

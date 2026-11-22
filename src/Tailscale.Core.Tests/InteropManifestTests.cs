@@ -136,6 +136,10 @@ namespace Tailscale.Core.Tests
         {
             T.Eq("sz:ciao", RegValue.Parse("sz:ciao").ToString(), "valore: sz va e torna");
             T.Eq("42", RegValue.Parse("dword:42").Text, "valore: dword va e torna");
+            T.Eq("sz:", new RegValue("sz", "").ToString(), "valore: il testo vuoto e' sz:");
+            T.Eq("", RegValue.Parse("sz:").Text, "valore: sz: si legge come testo vuoto");
+            T.True(new RegValue("sz", "").Equals(RegValue.Parse("sz:")),
+                   "valore: il testo vuoto va e torna");
             T.True(new RegValue("sz", "a").Equals(RegValue.Parse("sz:a")), "valore: due valori uguali sono uguali");
             T.False(new RegValue("sz", "1").Equals(RegValue.Parse("dword:1")), "valore: tipi diversi non sono uguali");
 
@@ -143,6 +147,11 @@ namespace Tailscale.Core.Tests
             try { RegValue.Parse("senzaduepunti"); }
             catch (FormatException ex) { caught = ex.Message; }
             T.True(caught != null, "valore: senza i due punti e' un errore");
+
+            caught = null;
+            try { RegValue.Parse("dword:"); }
+            catch (FormatException ex) { caught = ex.Message; }
+            T.True(caught != null, "valore: un dword senza testo resta un errore");
         }
 
         private static void HexAndDecimalDwordsAreEqual()

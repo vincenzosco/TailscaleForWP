@@ -132,6 +132,7 @@ namespace Tailscale.Core
                 List<RegistryEntry> entries = new List<RegistryEntry>();
                 foreach (RegistryEntry entry in _plan.All()) entries.Add(entry);
 
+                bool failed = false;
                 for (int i = 0; i < entries.Count; i++)
                 {
                     RegistryEntry entry = entries[i];
@@ -146,12 +147,17 @@ namespace Tailscale.Core
                     }
                     catch (Exception ex)
                     {
+                        // Una voce che non si ripristina non deve fermare le
+                        // altre: si logga e si continua, o una riga illeggibile
+                        // lascia il registro ripristinato solo a meta'.
+                        failed = true;
                         _state = VpnLinkState.Failed;
                         _log.Log("vpn: ripristino fallito per " + entry.FullName
                                  + " (" + ex.GetType().Name + ")");
-                        return;
                     }
                 }
+
+                if (failed) return;
 
                 Refresh();
                 _log.Log("vpn: valori precedenti ripristinati");

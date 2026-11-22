@@ -137,23 +137,29 @@ namespace Tailscale.Core
             text.Append("  exit /b 1\r\n");
             text.Append(")\r\n");
             text.Append("\r\n");
-            text.Append("for /f \"usebackq tokens=1,2,3* delims=|\" %%A in (\"%BACKUP%\") do call :restore \"%%A\" \"%%B\" \"%%C\" \"%%D\"\r\n");
+            // Il ripristino sta tutto nel ciclo, senza call e senza %VAR%: il
+            // dato del backup passa solo per variabili %% del for, che il cmd
+            // non riespande e non riparsa. Una call con il dato fra gli
+            // argomenti (o una %VAR%) riespanderebbe il contenuto e un " nel
+            // valore uscirebbe dalle virgolette iniettando comandi. /f prima
+            // di /d: se il dato apre virgolette non chiuse, reg.exe non deve
+            // restare in attesa di una conferma che non arriva mai.
+            text.Append("for /f \"usebackq tokens=1,2,3* delims=|\" %%A in (\"%BACKUP%\") do (\r\n");
+            text.Append("  if /i \"%%D\"==\"assente\" (\r\n");
+            text.Append("    reg delete \"%%A\\%%B\" /v \"%%C\" /f >nul 2>&1\r\n");
+            text.Append("  ) else (\r\n");
+            text.Append("    for /f \"tokens=1,* delims=:\" %%K in (\"%%D\") do (\r\n");
+            text.Append("      if /i \"%%K\"==\"dword\" (\r\n");
+            text.Append("        reg add \"%%A\\%%B\" /v \"%%C\" /t REG_DWORD /f /d %%L\r\n");
+            text.Append("      ) else (\r\n");
+            text.Append("        reg add \"%%A\\%%B\" /v \"%%C\" /t REG_SZ /f /d \"%%L\"\r\n");
+            text.Append("      )\r\n");
+            text.Append("    )\r\n");
+            text.Append("  )\r\n");
+            text.Append(")\r\n");
             text.Append("\r\n");
             text.Append("echo deprovision completato\r\n");
             text.Append("endlocal\r\n");
-            text.Append("exit /b 0\r\n");
-            text.Append("\r\n");
-            text.Append(":restore\r\n");
-            text.Append("if /i \"%~4\"==\"assente\" (\r\n");
-            text.Append("  reg delete \"%~1\\%~2\" /v \"%~3\" /f >nul 2>&1\r\n");
-            text.Append("  exit /b 0\r\n");
-            text.Append(")\r\n");
-            text.Append("for /f \"tokens=1,* delims=:\" %%K in (\"%~4\") do set \"KIND=%%K\" & set \"VAL=%%L\"\r\n");
-            text.Append("if /i \"%KIND%\"==\"dword\" (\r\n");
-            text.Append("  reg add \"%~1\\%~2\" /v \"%~3\" /t REG_DWORD /d %VAL% /f\r\n");
-            text.Append(") else (\r\n");
-            text.Append("  reg add \"%~1\\%~2\" /v \"%~3\" /t REG_SZ /d \"%VAL%\" /f\r\n");
-            text.Append(")\r\n");
             text.Append("exit /b 0\r\n");
             return text.ToString();
         }
@@ -202,8 +208,19 @@ namespace Tailscale.Core
         private static string RegData(RegistryEntry entry)
         {
             // Il dword si scrive nudo (e' un numero), il testo tra virgolette:
-            // un valore con spazi deve passare intero a reg.exe.
-            return entry.Value.Kind == RegValue.Dword ? entry.Value.Text : "\"" + entry.Value.Text + "\"";
+            // un valore con spazi deve passare intero a reg.exe. Nel batch,
+            // pero', una virgolette nel dato chiude la citazione e inietta
+            // comandi, la % si espande prima di arrivare a reg.exe e un a capo
+            // spezza la riga. La % si raddoppia, che e' la forma letterale del
+            // batch; le virgolette e gli a capo non si possono rappresentare
+            // in modo sicuro (nemmeno reg.exe li scrive bene) e la generazione
+            // si rifiuta, prima che il batch esista.
+            if (entry.Value.Kind == RegValue.Dword) return entry.Value.Text;
+            string text = entry.Value.Text;
+            if (text.IndexOf('"') >= 0 || text.IndexOf('\r') >= 0 || text.IndexOf('\n') >= 0)
+                throw new ArgumentException("valore sz di " + entry.FullName
+                                            + " non scrivibile nel batch: virgolette o a capo");
+            return "\"" + text.Replace("%", "%%") + "\"";
         }
 
         /// <summary>
