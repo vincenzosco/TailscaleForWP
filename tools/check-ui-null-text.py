@@ -65,12 +65,69 @@ SAFE_CALLS = (
 GUARDS = ("??", "== null ?", "!= null ?")
 
 LOCAL_DECL = re.compile(r"\bstring\s+([A-Za-z_]\w*)\s*=\s*([^;]+);")
-LOCAL_ASSIGN = re.compile(r"^\s*([A-Za-z_]\w*)\s*=\s*([^;]+);\s*$", re.M)
+# Dopo il `;` che chiude puo' restare qualcos'altro (un commento, un'altra
+# istruzione): il `\s*$` esigeva la fine riga e rendeva invisibili le
+# riassegnazioni seguite da un commento.
+LOCAL_ASSIGN = re.compile(r"^\s*([A-Za-z_]\w*)\s*=\s*([^;]+);", re.M)
+
+# L'assegnazione a un testo di controllo: il nome non deve per forza aprire
+# l'istruzione, perche' davanti puo' esserci un costrutto (`if (c) X.Text = ...`,
+# `lock (g) { X.Text = ... }`). Il confine accettato e' l'inizio dell'istruzione
+# o la fine del costrutto che la precede.
+TEXT_ASSIGN = re.compile(
+    r"(?:^|[;{})])\s*(?:else\s+|do\s+)?([A-Za-z_]\w*)\s*\.\s*Text\s*=\s*(.+)$", re.S)
 
 
 def read(path):
     with open(path, "r", encoding="utf-8-sig") as handle:
         return handle.read()
+
+
+def strip_comments(text):
+    """Toglie i commenti dal codice, rispettando i letterali: un URL dentro una
+    stringa non e' un commento. I caratteri a capo restano al loro posto, cosi'
+    i numeri di riga non cambiano. Senza questo un commento dopo un `;` fa
+    sparire la riassegnazione, e un commento attaccato all'espressione la fa
+    sembrare non dimostrabile."""
+    out = []
+    index = 0
+    quote = ""
+    verbatim = False
+    while index < len(text):
+        char = text[index]
+        if quote:
+            out.append(char)
+            if not verbatim and char == "\\" and index + 1 < len(text):
+                out.append(text[index + 1])
+                index += 1
+            elif char == quote:
+                if verbatim and index + 1 < len(text) and text[index + 1] == '"':
+                    # Dentro una stringa verbatim le virgolette si raddoppiano.
+                    out.append(text[index + 1])
+                    index += 1
+                else:
+                    quote = ""
+                    verbatim = False
+        elif char in "\"'":
+            quote = char
+            verbatim = char == '"' and index > 0 and text[index - 1] == "@"
+            out.append(char)
+        elif text.startswith("//", index):
+            while index < len(text) and text[index] != "\n":
+                index += 1
+            continue
+        elif text.startswith("/*", index):
+            index += 2
+            while index < len(text) and not text.startswith("*/", index):
+                if text[index] == "\n":
+                    out.append("\n")
+                index += 1
+            index += 2
+            continue
+        else:
+            out.append(char)
+        index += 1
+    return "".join(out)
 
 
 def text_blocks(root):
@@ -120,6 +177,35 @@ def statements(text):
             statement = statement + "\n" + lines[index]
         yield start + 1, statement.strip()
         index += 1
+
+
+def expression_of(statement):
+    """Il valore assegnato dentro l'istruzione: fino al `;` che la chiude (o
+    alla `}` che chiude il blocco). Un `;` o una `}` dentro un letterale non
+    chiude niente, e il commento e' gia' stato tolto: senza questo pezzo
+    l'espressione si porta dietro il `;`, la `}` del blocco o il commento, e il
+    controllo fallisce (o passa) su roba che non e' l'espressione."""
+    quote = ""
+    verbatim = False
+    index = 0
+    while index < len(statement):
+        char = statement[index]
+        if quote:
+            if not verbatim and char == "\\" and index + 1 < len(statement):
+                index += 1
+            elif char == quote:
+                if verbatim and index + 1 < len(statement) and statement[index + 1] == '"':
+                    index += 1
+                else:
+                    quote = ""
+                    verbatim = False
+        elif char in "\"'":
+            quote = char
+            verbatim = char == '"' and index > 0 and statement[index - 1] == "@"
+        elif char in ";}":
+            return statement[:index]
+        index += 1
+    return statement
 
 
 def top_level_parts(text, operator):
@@ -181,11 +267,65 @@ def declaration(path, member):
     return None
 
 
+def ternary_split(text):
+    """(condizione, ramo_se_vero, ramo_se_falso) se l'espressione e' un
+    condizionale a livello superiore, altrimenti None. Il `:` da abbinare si
+    trova contando i `?` annidati: un ramo puo' contenere un altro condizionale
+    senza parentesi, e un `??` non apre un ramo."""
+    depth = 0
+    quote = ""
+    verbatim = False
+    index = 0
+    mark = -1
+    nested = 0
+    while index < len(text):
+        char = text[index]
+        if quote:
+            if not verbatim and char == "\\" and index + 1 < len(text):
+                index += 1
+            elif char == quote:
+                if verbatim and index + 1 < len(text) and text[index + 1] == '"':
+                    index += 1
+                else:
+                    quote = ""
+                    verbatim = False
+        elif char in "\"'":
+            quote = char
+            verbatim = char == '"' and index > 0 and text[index - 1] == "@"
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        elif depth == 0 and text.startswith("??", index):
+            index += 1
+        elif depth == 0 and char == "?":
+            if mark < 0:
+                mark = index
+            nested += 1
+        elif depth == 0 and char == ":" and mark >= 0:
+            nested -= 1
+            if nested == 0:
+                return text[:mark], text[mark + 1:index], text[index + 1:]
+        index += 1
+    return None
+
+
 def non_null(expression, locals_by_name, seen):
     """Vero se l'espressione non puo' essere nulla, con il perche'."""
     expr = expression.strip().rstrip(";").strip()
     if not expr:
         return False, "espressione vuota"
+
+    # Un condizionale e' non nullo solo se lo sono TUTTI i rami: classificarlo
+    # dall'ultimo identificatore faceva passare `flag ? Nullo() : motore.Nome`,
+    # che FINISCE con un membro mai nullo ma ha un ramo nullo.
+    conditional = ternary_split(expr)
+    if conditional is not None:
+        for branch in (conditional[1], conditional[2]):
+            ok, why = non_null(branch, locals_by_name, seen)
+            if not ok:
+                return False, "un ramo del condizionale puo' essere nullo (%s)" % why
+        return True, "tutti i rami del condizionale sono non nulli"
 
     # Un ripiego dichiarato vale: `A ?? B` e' non nullo se lo e' B.
     coalesce = top_level_parts(expr, "??")
@@ -221,20 +361,24 @@ def non_null(expression, locals_by_name, seen):
                                "che puo' essere nulla" % expr)
         return True, "variabile locale costruita da un testo non nullo"
 
-    member = expr.split(".")[-1].split("(")[0].strip()
-    if member in NEVER_NULL and member not in seen:
-        path, why = NEVER_NULL[member]
-        if not os.path.exists(path):
-            return False, "la dichiarazione di %s non e' piu' in %s" % (member, path)
-        body = declaration(path, member)
-        if body is None:
-            return False, ("%s non e' dichiarata con un corpo in %s: una proprieta' "
-                           "automatica puo' essere nulla" % (member, path))
-        if not any(guard in body for guard in GUARDS):
-            return False, ("%s non garantisce piu' il non-nullo (%s): usa %s, oppure "
-                           "ripiega qui nell'assegnazione"
-                           % (member, path, " o ".join(GUARDS)))
-        return True, "%s: %s" % (member, why)
+    # Un membro mai nullo vale solo se l'intera espressione e' la catena di
+    # accessi al membro: guardare il solo ultimo pezzo lasciava passare
+    # qualunque espressione che ci FINISSE, come `F(motore.Nome)`.
+    if re.match(r"^[A-Za-z_]\w*(\s*\.\s*[A-Za-z_]\w*)*$", expr):
+        member = expr.split(".")[-1].strip()
+        if member in NEVER_NULL and member not in seen:
+            path, why = NEVER_NULL[member]
+            if not os.path.exists(path):
+                return False, "la dichiarazione di %s non e' piu' in %s" % (member, path)
+            body = declaration(path, member)
+            if body is None:
+                return False, ("%s non e' dichiarata con un corpo in %s: una proprieta' "
+                               "automatica puo' essere nulla" % (member, path))
+            if not any(guard in body for guard in GUARDS):
+                return False, ("%s non garantisce piu' il non-nullo (%s): usa %s, oppure "
+                               "ripiega qui nell'assegnazione"
+                               % (member, path, " o ".join(GUARDS)))
+            return True, "%s: %s" % (member, why)
 
     return False, "il controllo non sa dimostrare che non sia nulla"
 
@@ -251,7 +395,7 @@ def main():
     checked = 0
     assigned_names = set()
     for path in code_files(root):
-        text = read(path)
+        text = strip_comments(read(path))
         relative = os.path.relpath(path, root).replace("\\", "/")
 
         # Le variabili locali di testo: valgono come l'espressione da cui nascono.
@@ -263,7 +407,7 @@ def main():
                 locals_by_name[name].append(value)
 
         for line, statement in statements(text):
-            match = re.match(r"^\s*([A-Za-z_]\w*)\s*\.\s*Text\s*=\s*(.+)$", statement, re.S)
+            match = TEXT_ASSIGN.search(statement)
             if not match:
                 continue
             control = match.group(1)
@@ -271,7 +415,7 @@ def main():
                 continue
             checked += 1
             assigned_names.add(control)
-            ok, why = non_null(match.group(2), locals_by_name, set())
+            ok, why = non_null(expression_of(match.group(2)), locals_by_name, set())
             if not ok:
                 problems.append("%s:%d: %s.Text prende un testo che puo' essere nullo (%s)"
                                 % (relative, line, control, why))
