@@ -63,10 +63,13 @@ namespace Tailscale.Core
                 // che abbiamo messo noi alla corsa precedente. Senza questa
                 // guardia (vista eseguendo il batch due volte) il backup
                 // finirebbe per contenere i nostri valori, e deprovision.bat
-                // ripristinerebbe quelli invece di quelli dell'utente.
-                text.Append("findstr /c:\"")
+                // ripristinerebbe quelli invece di quelli dell'utente. Il
+                // confronto e' sulla riga con il campo delimitato: un nome che
+                // inizia come un altro ("Vpn" e "Vpn Link") non deve far saltare
+                // il backup dell'uno o dell'altro.
+                text.Append("findstr /l /b /c:\"")
                     .Append(entry.Hive).Append("|").Append(entry.Path).Append("|").Append(entry.Name)
-                    .Append("\" \"%BACKUP%\" >nul 2>&1\r\n");
+                    .Append("|\" \"%BACKUP%\" >nul 2>&1\r\n");
                 text.Append("if not errorlevel 1 goto skip").Append(i + 1).Append("\r\n");
 
                 text.Append("reg query \"").Append(KeyPath(entry)).Append("\" /v \"").Append(entry.Name)
@@ -74,12 +77,17 @@ namespace Tailscale.Core
                 text.Append("if errorlevel 1 (\r\n");
                 text.Append("  echo ").Append(EchoPart(entry)).Append("^|assente>>\"%BACKUP%\"\r\n");
                 text.Append(") else (\r\n");
-                text.Append("  for /f \"tokens=1,2*\" %%A in ('reg query \"").Append(KeyPath(entry))
-                    .Append("\" /v \"").Append(entry.Name).Append("\" 2^>nul ^| findstr /c:\"").Append(entry.Name)
-                    .Append("\"') do (\r\n");
-                text.Append("    if /i \"%%B\"==\"REG_DWORD\" (echo ").Append(EchoPart(entry))
-                    .Append("^|dword:%%C>>\"%BACKUP%\") else (echo ").Append(EchoPart(entry))
-                    .Append("^|sz:%%C>>\"%BACKUP%\")\r\n");
+                // La riga di reg query e' `nome    REG_TIPO    dato`: il nome
+                // puo' contenere spazi e il dato anche, con gli spazi interni che
+                // contano. Il tipo e' il token subito dopo quelli del nome:
+                // `tokens=N,*` prende il tipo in %%A e il resto della riga (il
+                // dato, intatto) in %%B, senza spezzare niente sugli spazi. Il
+                // filtro tiene la riga del valore, non l'intestazione.
+                text.Append("  for /f \"tokens=").Append(TypeColumn(entry)).Append(",*\" %%A in ('reg query \"").Append(KeyPath(entry))
+                    .Append("\" /v \"").Append(entry.Name).Append("\" 2^>nul ^| findstr /c:\" REG_\"') do (\r\n");
+                text.Append("    if /i \"%%A\"==\"REG_DWORD\" (echo ").Append(EchoPart(entry))
+                    .Append("^|dword:%%B>>\"%BACKUP%\") else (echo ").Append(EchoPart(entry))
+                    .Append("^|sz:%%B>>\"%BACKUP%\")\r\n");
                 text.Append("  )\r\n");
                 text.Append(")\r\n");
                 text.Append(":skip").Append(i + 1).Append("\r\n");
@@ -196,6 +204,17 @@ namespace Tailscale.Core
             // Il dword si scrive nudo (e' un numero), il testo tra virgolette:
             // un valore con spazi deve passare intero a reg.exe.
             return entry.Value.Kind == RegValue.Dword ? entry.Value.Text : "\"" + entry.Value.Text + "\"";
+        }
+
+        /// <summary>
+        /// La colonna del tipo in `reg query`: una per ogni parola del nome, piu'
+        /// una. Un nome con spazi ("Vpn Link") occupa piu' token, ma il tipo
+        /// resta quello dopo: la riga si legge per posizione e non per spazi.
+        /// </summary>
+        private static int TypeColumn(RegistryEntry entry)
+        {
+            string[] words = entry.Name.Split(new char[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+            return words.Length + 1;
         }
     }
 }

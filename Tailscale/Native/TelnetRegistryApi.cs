@@ -200,7 +200,22 @@ namespace Tailscale.Native
         public bool TryRead(string hive, string path, string name, out RegValue value)
         {
             string output = _shell.Execute("reg query \"" + Key(hive, path) + "\" /v \"" + name + "\"");
-            return RegQueryParser.TryParseValue(output, name, out value);
+            if (RegQueryParser.TryParseValue(output, name, out value)) return true;
+
+            // Assenza dichiarata: reg.exe ha detto che il valore non c'e'.
+            if (IsNotFound(output))
+            {
+                value = null;
+                return false;
+            }
+
+            // Ne' valore ne' assenza: la risposta e' vuota o illeggibile (finestra
+            // di silenzio, risposta monca, decode corrotto). Un'assenza inventata
+            // qui diventerebbe un backup "<assente>" e il ripristino cancellerebbe
+            // il valore dell'utente: si fallisce e non si scrive niente.
+            value = null;
+            throw new InvalidOperationException("reg query illeggibile per "
+                                                + hive + "\\" + path + "\\" + name);
         }
 
         public void Write(string hive, string path, string name, RegValue value)

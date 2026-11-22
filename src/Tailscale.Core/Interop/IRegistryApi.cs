@@ -125,7 +125,7 @@ namespace Tailscale.Core
     /// </summary>
     public interface IRegistryApi
     {
-        /// <summary>Il valore, o false se il valore non esiste. Un errore di accesso e' un'eccezione.</summary>
+        /// <summary>Il valore, o false se il valore non esiste. Un errore di accesso o una risposta illeggibile sono un'eccezione.</summary>
         bool TryRead(string hive, string path, string name, out RegValue value);
 
         void Write(string hive, string path, string name, RegValue value);

@@ -23,6 +23,7 @@ namespace Tailscale.Core.Tests
             Case("valore: forma tipo:testo e uguaglianza", ValueShapeAndEquality);
             Case("valore: dword in hex e decimale sono lo stesso valore", HexAndDecimalDwordsAreEqual);
             Case("reg query: l'output diventa un valore", RegQueryOutputBecomesAValue);
+            Case("reg query: nomi con spazi, dati vuoti e nomi prefisso", RegQuerySpacedNamesAndEmptyData);
         }
 
         private static void Case(string name, Action test)
@@ -182,6 +183,34 @@ namespace Tailscale.Core.Tests
                     "reg query: il valore cercato e non presente e' false");
             T.False(RegQueryParser.TryParseValue(null, "VpnLink", out value),
                     "reg query: output nullo e' false");
+        }
+
+        private static void RegQuerySpacedNamesAndEmptyData()
+        {
+            RegValue value;
+            T.True(RegQueryParser.TryParseValue(
+                       "    Vpn Link    REG_SZ    on\r\n", "Vpn Link", out value),
+                   "reg query: un nome con spazi si legge");
+            T.Eq("on", value.Text, "reg query: il valore del nome con spazi torna intero");
+
+            T.True(RegQueryParser.TryParseValue(
+                       "    ProxyServer    REG_SZ    a b   c\r\n", "ProxyServer", out value),
+                   "reg query: un dato con spazi multipli si legge");
+            T.Eq("a b   c", value.Text, "reg query: gli spazi interni del dato restano");
+
+            T.True(RegQueryParser.TryParseValue(
+                       "    Empty Val    REG_SZ    \r\n", "Empty Val", out value),
+                   "reg query: un REG_SZ vuoto si legge");
+            T.Eq("", value.Text, "reg query: il REG_SZ vuoto e' testo vuoto, non assenza");
+
+            T.False(RegQueryParser.TryParseValue(
+                        "    Vpn Link    REG_SZ    on\r\n", "Vpn", out value),
+                    "reg query: un nome che inizia come un altro non si confonde");
+
+            T.True(RegQueryParser.TryParseValue(
+                       "    Vpn REG_SZ x    REG_SZ    y\r\n", "Vpn REG_SZ x", out value),
+                   "reg query: un nome con il tipo dentro si legge");
+            T.Eq("y", value.Text, "reg query: il dato e' quello dopo il tipo vero");
         }
     }
 }

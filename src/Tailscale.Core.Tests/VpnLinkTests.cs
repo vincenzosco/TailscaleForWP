@@ -29,6 +29,7 @@ namespace Tailscale.Core.Tests
             Case("vpn: niente valori, niente stato attivo", WithoutValuesNothingIsOn);
             Case("vpn: revert ripristina valori e assenze", RevertRestoresValuesAndAbsences);
             Case("payload: backup prima, scrittura, verifica dopo", PayloadBacksUpBeforeWriting);
+            Case("payload: nomi con spazi e nomi che iniziano come un altro", PayloadSplitsNamesWithSpaces);
             Case("payload: deprovision ripristina dal backup", DeprovisionRestoresFromBackup);
         }
 
@@ -190,6 +191,29 @@ namespace Tailscale.Core.Tests
                    "payload: rieseguire il batch non sovrascrive il backup");
             T.True(batch.Contains("NON crea alcun tunnel"),
                    "payload: il batch dice che il registro non crea il tunnel");
+        }
+
+        private static void PayloadSplitsNamesWithSpaces()
+        {
+            InteropPlan plan = new InteropPlan();
+            plan.On.Add(new RegistryEntry("HKLM", "SOFTWARE\\TailscaleWP", "Vpn Link",
+                                          new RegValue(RegValue.Sz, "on")));
+            plan.On.Add(new RegistryEntry("HKLM", "SOFTWARE\\TailscaleWP", "Vpn",
+                                          new RegValue(RegValue.Sz, "on")));
+            string batch = ProvisionPayload.Generate(plan, "20261013-120000");
+
+            T.True(batch.Contains("tokens=3,*"),
+                   "payload: il tipo del nome con spazi e' la terza colonna");
+            T.True(batch.Contains("tokens=2,*"),
+                   "payload: il tipo del nome senza spazi e' la seconda colonna");
+            T.False(batch.Contains("tokens=1,2*"),
+                    "payload: piu' niente cattura spezzata sugli spazi");
+            T.True(batch.Contains("sz:%%B"),
+                   "payload: il dato si prende tutto d'un pezzo, spazi compresi");
+            T.True(batch.Contains("findstr /l /b /c:\"HKLM|SOFTWARE\\TailscaleWP|Vpn|\""),
+                   "payload: la guardia del backup e' ancorata al nome esatto");
+            T.True(batch.Contains("findstr /l /b /c:\"HKLM|SOFTWARE\\TailscaleWP|Vpn Link|\""),
+                   "payload: il nome con spazi ha la sua riga di backup");
         }
 
         private static void DeprovisionRestoresFromBackup()
