@@ -4,6 +4,7 @@ using System.IO;
 using Tailscale.Core;
 using Tailscale.Core.Control;
 using Tailscale.Core.Keys;
+using Tailscale.Core.Protocol;
 using Tailscale.Core.Tailcfg;
 
 namespace Tailscale.Core.Tests
@@ -30,6 +31,9 @@ namespace Tailscale.Core.Tests
             Case("errore duplicato: recupero", RecoversFromDuplicateIdentityError);
             Case("errore duplicato su non-200", RecoversFromDuplicateOnNonSuccess);
             Case("errore duplicato ripetuto: stop", StopsAfterOneDuplicateRefresh);
+            Case("chiave scaduta: la rotazione si salva", RotatedNodeKeyIsPersisted);
+            Case("chiave scaduta due volte: stop", StopsAfterOneKeyRotation);
+            Case("dial fallito: si riprova entro il budget", DialFailureIsRetried);
             Case("canale rotto: non si riusa", BrokenChannelIsNotReused);
             Case("canale interrotto: la registrazione riprova", ChannelFailureDuringRegisterIsRetried);
             Case("canale interrotto sempre: si smette con un errore", RegisterGivesUpAfterTheBudget);
@@ -337,6 +341,82 @@ namespace Tailscale.Core.Tests
             T.Eq(2, script.Calls, "duplicato ripetuto: al massimo un refresh");
             T.Eq(ControlState.Error.ToString(), client.Status.State.ToString(),
                  "duplicato ripetuto: l'errore viene mostrato invece di ciclare");
+        }
+
+        /// <summary>
+        /// Una rotazione forzata dal server lascia la chiave nuova nello store: se
+        /// non si salvasse, al prossimo avvio si ripartirebbe da quella vecchia (che
+        /// lo store dice ancora autorizzata) e si ruoterebbe a ogni lancio.
+        /// </summary>
+        private static void RotatedNodeKeyIsPersisted()
+        {
+            Script script = new Script();
+            script.Enqueue(200, NodeKeyExpiredResponse());
+            script.Enqueue(200, AuthorizedResponse());
+            MemoryStateStore store = AuthorizedStore();
+            string stale = store.Read("nodeKey");
+
+            ControlClient client = RunScript(store, script, null);
+
+            T.Eq(2, script.Calls, "rotazione: un giro in piu' con la chiave nuova");
+            T.Eq(client.NodeKey.ToString(), store.Read("nodeKey"),
+                 "rotazione: la chiave ruotata e' salvata nello store");
+            T.Eq(stale, JsonString(script.LastRegisterBody, "OldNodeKey"),
+                 "rotazione: il secondo giro dichiara la chiave vecchia");
+        }
+
+        /// <summary>
+        /// Una seconda NodeKeyExpired dopo la rotazione e' un bug del server (o del
+        /// cliente): il client Go smette, e smette anche questo invece di rigenerare
+        /// chiavi all'infinito.
+        /// </summary>
+        private static void StopsAfterOneKeyRotation()
+        {
+            Script script = new Script();
+            for (int i = 0; i < 4; i++) script.Enqueue(200, NodeKeyExpiredResponse());
+            MemoryStateStore store = AuthorizedStore();
+
+            ControlClient client = RunScript(store, script, null);
+
+            T.Eq(2, script.Calls, "rotazione ripetuta: al massimo una rotazione");
+            T.Eq(ControlState.Error.ToString(), client.Status.State.ToString(),
+                 "rotazione ripetuta: l'errore viene mostrato invece di ciclare");
+        }
+
+        /// <summary>
+        /// Un dial che fallisce e' passeggero quanto un canale interrotto: deve
+        /// consumare il budget dei tentativi invece di diventare subito l'errore
+        /// finale che ferma il motore.
+        /// </summary>
+        private static void DialFailureIsRetried()
+        {
+            MemoryStateStore store = AuthorizedStore();
+            ControlClientOptions options = Options(store, new FakeConnection());
+            options.MaxChannelRetries = 2;
+            int attempts = 0;
+            options.ConnectionFactory = delegate()
+            {
+                attempts++;
+                throw new ControlDialException("nessuna porta risponde");
+            };
+
+            ControlClient[] holder = new ControlClient[1];
+            int sleeps = 0;
+            options.Sleep = delegate(int milliseconds)
+            {
+                sleeps++;
+                // Il backoff dorme a pezzi: senza un tetto il test non finirebbe mai
+                // se qualcosa nel recupero cambiasse.
+                if (sleeps > 100 && holder[0] != null) holder[0].Stop();
+            };
+
+            ControlClient client = new ControlClient(options);
+            holder[0] = client;
+            client.Start();
+
+            T.Eq(3, attempts, "dial fallito: si riprova fino a esaurire il budget");
+            T.Eq(ControlState.Error.ToString(), client.Status.State.ToString(),
+                 "dial fallito: finito il budget, l'errore viene mostrato");
         }
 
         /// <summary>
@@ -921,6 +1001,11 @@ namespace Tailscale.Core.Tests
         private static string AuthorizedResponse()
         {
             return "{\"MachineAuthorized\":true,\"LoginName\":\"vincenzo@example.com\"}";
+        }
+
+        private static string NodeKeyExpiredResponse()
+        {
+            return "{\"NodeKeyExpired\":true}";
         }
 
         private static ControlClientOptions Options(IStateStore store, FakeConnection connection)

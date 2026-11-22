@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using System.Threading;
 using Tailscale.Core.Control;
 using Tailscale.Core.Keys;
 using Tailscale.Core.Net;
@@ -39,9 +40,6 @@ namespace Tailscale.Core.Protocol
             if (connector == null) throw new ArgumentNullException("connector");
             if (log == null) log = NullLogSink.Instance;
 
-            NoiseHandshakeStart start = NoiseHandshake.Deferred(machineKey, keys.NoiseKey, version, random);
-            string handshake = Convert.ToBase64String(start.InitialMessage, 0, start.InitialMessage.Length);
-
             List<string> failures = new List<string>();
 
             foreach (int port in Ports)
@@ -49,6 +47,12 @@ namespace Tailscale.Core.Protocol
                 bool useTls = port == 443;
                 string scheme = useTls ? "https" : "http";
                 Stream stream = null;
+
+                // L'handshake e' monouso (il seguito si completa una volta sola) e
+                // l'effimera appartiene al tentativo: ogni porta ha il proprio, come
+                // nel client Go, che ne crea uno per dial.
+                NoiseHandshakeStart start = NoiseHandshake.Deferred(machineKey, keys.NoiseKey, version, random);
+                string handshake = Convert.ToBase64String(start.InitialMessage, 0, start.InitialMessage.Length);
 
                 try
                 {
@@ -104,15 +108,30 @@ namespace Tailscale.Core.Protocol
         }
 
         /// <summary>
-        /// L'handshake differito va completato una sola volta: se fallisce qui non si
-        /// puo' ritentare con lo stesso oggetto, quindi l'errore e' definitivo.
+        /// Completa l'handshake differito di questo tentativo. Il seguito e' monouso,
+        /// ma ogni porta ha il proprio, quindi un fallimento qui passa solo al
+        /// tentativo dopo. Un server muto non deve fermare il dial: allo scadere di
+        /// HandshakeTimeoutMs si chiude lo stream e la Complete muore da sola.
         /// </summary>
         private static NoiseSession StartWithTimeout(NoiseHandshakeStart start, Stream stream, ILogSink log)
         {
+            // Un server che accetta l'upgrade e poi sta zitto bloccherebbe la Complete
+            // per sempre. Il gettone decide l'ultima parola fra watchdog e completamento:
+            // se scade il watchdog mentre si completava, la sessione non vale piu'.
+            int settled = 0;
+            Timer watchdog = new Timer(delegate(object state)
+            {
+                if (Interlocked.CompareExchange(ref settled, 1, 0) != 0) return;
+                log.Log("ts2021: nessuna risposta all'handshake per " + HandshakeTimeoutMs
+                        + " ms, chiudo lo stream");
+                try { stream.Dispose(); }
+                catch (Exception) { }
+            }, null, HandshakeTimeoutMs, Timeout.Infinite);
+
+            NoiseSession session;
             try
             {
-                NoiseSession session = start.Continuation.Complete(stream);
-                return session;
+                session = start.Continuation.Complete(stream);
             }
             catch (NoiseHandshakeException ex)
             {
@@ -127,6 +146,15 @@ namespace Tailscale.Core.Protocol
                 throw new ControlDialException(
                     "upgrade riuscito ma handshake Noise fallito: " + ex.Message, ex);
             }
+            finally
+            {
+                watchdog.Dispose();
+            }
+
+            if (Interlocked.CompareExchange(ref settled, 1, 0) != 0)
+                throw new ControlDialException(
+                    "handshake scaduto: nessuna risposta entro " + HandshakeTimeoutMs + " ms");
+            return session;
         }
 
         /// <summary>

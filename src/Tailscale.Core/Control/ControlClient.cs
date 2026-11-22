@@ -492,6 +492,7 @@ namespace Tailscale.Core.Control
         {
             bool sentFollowup = false;
             int waitedSeconds = 0;
+            int rotations = 0;
 
             while (!_stopping)
             {
@@ -578,6 +579,31 @@ namespace Tailscale.Core.Control
                     if (!RecoverFromChannelFailure("il canale di controllo", ex)) return false;
                     continue;
                 }
+                catch (ControlDialException ex)
+                {
+                    // Il dial che fallisce e' passeggero quanto un canale interrotto
+                    // (e' cio' che promette il commento dentro il try): passa dallo
+                    // stesso budget invece di diventare l'errore finale.
+                    if (_stopping)
+                    {
+                        _options.Log.Log("registrazione interrotta: il motore e' in arresto");
+                        return false;
+                    }
+                    if (!RecoverFromChannelFailure("il canale di controllo", ex)) return false;
+                    continue;
+                }
+                catch (ControlServerKeyException ex)
+                {
+                    // Anche il caricamento delle chiavi del server rientra nel canale:
+                    // stesso recupero passeggero, stesso budget.
+                    if (_stopping)
+                    {
+                        _options.Log.Log("registrazione interrotta: il motore e' in arresto");
+                        return false;
+                    }
+                    if (!RecoverFromChannelFailure("il canale di controllo", ex)) return false;
+                    continue;
+                }
 
                 // Il canale ha risposto: i guasti di prima erano davvero passeggeri e il
                 // budget riparte da zero. Il tetto conta cosi' i guasti *consecutivi*,
@@ -639,7 +665,15 @@ namespace Tailscale.Core.Control
                 {
                     // Il server chiede una chiave nuova: si rigenera e si riregistra con
                     // OldNodeKey. Non si insiste all'infinito: una sola rotazione per
-                    // risposta, come il client Go.
+                    // registrazione, come il client Go, che alla seconda risposta del
+                    // genere smette invece di rigenerare ancora.
+                    if (rotations > 0)
+                    {
+                        SetState(ControlState.Error, null,
+                                 "il server ha chiesto un'altra rotazione della chiave: non si insiste");
+                        return false;
+                    }
+                    rotations++;
                     RotateNodeKey(parsed);
                     sentFollowup = false;
                     continue;
@@ -968,6 +1002,9 @@ namespace Tailscale.Core.Control
             // La nuova chiave va comunicata al server come OldNodeKey al prossimo giro;
             // il campo resta nella richiesta successiva.
             _oldNodeKey = previous;
+            // E va salvata nello store: senza, al prossimo avvio si riparte da quella
+            // vecchia (ancora marcata autorizzata) e si ruota a ogni lancio.
+            SaveNodeKey();
         }
 
         private string _oldNodeKey;
