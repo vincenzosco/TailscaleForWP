@@ -69,6 +69,19 @@ namespace Tailscale.Core.Tests
                 Blake2s.KeyedHash(Key(0, 16), Key(0, 100), 32),
                 "blake2s con chiave da 16 byte e input da 100 byte");
 
+            // Messaggio vuoto con chiave: per la RFC 7693 §3.3 il blocco pad
+            // della chiave e' anche quello finale, senza un blocco di zeri
+            // aggiuntivo. I valori sono hashlib.blake2s di Python.
+            T.Eq(
+                T.FromHex("48a8997da407876b3d79c0d92325ad3b89cbb754d86ab71aee047ad345fd2c49"),
+                Blake2s.KeyedHash(Key(0, 32), new byte[0], 32),
+                "blake2s con chiave di 32 byte e messaggio vuoto");
+
+            T.Eq(
+                T.FromHex("fcfc1128807d157b01adec1ebe0a0927e5ac0ea65000fcec0852218dbb147106"),
+                Blake2s.KeyedHash(Key(0, 16), new byte[0], 32),
+                "blake2s con chiave di 16 byte e messaggio vuoto");
+
             // La chiave cambia il risultato: non e' un hash non-keyed travestito.
             T.False(
                 T.ToHex(Blake2s.Hash(Encoding.UTF8.GetBytes("abc"), 32))

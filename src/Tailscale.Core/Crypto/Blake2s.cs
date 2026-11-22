@@ -64,24 +64,32 @@ namespace Tailscale.Core.Crypto
                 byte[] keyBlock = new byte[BlockSize];
                 Array.Copy(key, keyBlock, keyLen);
                 counter = BlockSize;
-                Compress(h, keyBlock, 0, counter, false);
+                // RFC 7693 §3.3: con un messaggio vuoto il blocco pad della
+                // chiave e' anche l'ultimo blocco, compresso come finale; il
+                // blocco di zeri che seguirebbe non va compresso.
+                Compress(h, keyBlock, 0, counter, input.Length == 0);
             }
 
-            byte[] block = new byte[BlockSize];
-            int offset = 0;
-            int remaining = input.Length;
-
-            while (remaining > BlockSize)
+            // Con chiave e messaggio vuoto il blocco della chiave e' gia'
+            // compresso come finale: il blocco di zeri non serve piu'.
+            if (keyLen == 0 || input.Length > 0)
             {
-                counter += BlockSize;
-                Compress(h, input, offset, counter, false);
-                offset += BlockSize;
-                remaining -= BlockSize;
-            }
+                byte[] block = new byte[BlockSize];
+                int offset = 0;
+                int remaining = input.Length;
 
-            Array.Copy(input, offset, block, 0, remaining);
-            counter += (ulong)remaining;
-            Compress(h, block, 0, counter, true);
+                while (remaining > BlockSize)
+                {
+                    counter += BlockSize;
+                    Compress(h, input, offset, counter, false);
+                    offset += BlockSize;
+                    remaining -= BlockSize;
+                }
+
+                Array.Copy(input, offset, block, 0, remaining);
+                counter += (ulong)remaining;
+                Compress(h, block, 0, counter, true);
+            }
 
             byte[] output = new byte[outLen];
             for (int i = 0; i < outLen; i++)
