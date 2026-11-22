@@ -18,10 +18,13 @@ namespace Tailscale.Core.Tests
             {
                 RoundTrip(path);
                 CorruptFileIsTolerated(path);
+                LeavesNoTempResidue(path);
+                WriteFailureIsSurfaced(path);
             }
             finally
             {
                 if (File.Exists(path)) File.Delete(path);
+                if (File.Exists(path + ".tmp")) File.Delete(path + ".tmp");
             }
         }
 
@@ -55,6 +58,44 @@ namespace Tailscale.Core.Tests
 
             store.Write("nodeKey", "nodekey:beef");
             T.Eq("nodekey:beef", new FileStateStore(path).Read("nodeKey"), "e si puo' riscrivere sopra");
+        }
+
+        private static void LeavesNoTempResidue(string path)
+        {
+            // Il salvataggio scrive un file a parte e lo sostituisce in un colpo
+            // solo: dopo ogni scrittura non deve restare nulla in giro.
+            FileStateStore store = new FileStateStore(path);
+            store.Write("nodeKey", "nodekey:1");
+            store.Write("nodeKey", "nodekey:2");
+            T.False(File.Exists(path + ".tmp"), "salvataggio: nessun temporaneo lasciato in giro");
+            T.Eq("nodekey:2", new FileStateStore(path).Read("nodeKey"), "salvataggio: il file contiene l'ultimo valore");
+        }
+
+        private static void WriteFailureIsSurfaced(string path)
+        {
+            // Il file vivo e' chiuso con un lock esclusivo: la sostituzione non
+            // puo' riuscire. L'errore deve arrivare al chiamante invece di essere
+            // solo loggato, e il file vivo deve restare quello vecchio: meglio
+            // uno stato non aggiornato che uno stato perso.
+            FileStateStore store = new FileStateStore(path);
+            store.Write("nodeKey", "nodekey:vecchio");
+
+            bool surfaced = false;
+            using (FileStream locked = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                try
+                {
+                    store.Write("nodeKey", "nodekey:nuovo");
+                }
+                catch (IOException)
+                {
+                    surfaced = true;
+                }
+            }
+
+            T.True(surfaced, "salvataggio: il guasto di scrittura arriva al chiamante");
+            T.Eq("nodekey:vecchio", new FileStateStore(path).Read("nodeKey"),
+                 "salvataggio: il file vivo resta quello vecchio");
         }
     }
 }

@@ -97,19 +97,41 @@ namespace Tailscale.Core
 
         private void Save()
         {
-            try
-            {
-                string directory = System.IO.Path.GetDirectoryName(_path);
-                if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-                    Directory.CreateDirectory(directory);
+            // Il file si scrive a parte e si sostituisce in un colpo solo:
+            // un crash in mezzo a File.WriteAllText lascerebbe il file vivo
+            // troncato, e il prossimo Load() butterebbe via tutto perdendo
+            // l'identita'.
+            string directory = System.IO.Path.GetDirectoryName(_path);
+            string temp = _path + ".tmp";
+            Exception failure = null;
 
-                File.WriteAllText(_path, ToJson(), new UTF8Encoding(false));
-            }
-            catch (Exception ex)
+            // Un tentativo in piu': un errore transitorio non deve costare
+            // l'identita', ma se il guasto persiste il chiamante ha il diritto
+            // di saperlo, invece di scoprirlo al prossimo riavvio.
+            for (int attempt = 0; attempt < 2; attempt++)
             {
-                _log.Log("stato: non riesco a scrivere " + _path + " (" + ex.GetType().Name
-                         + ": " + ex.Message + "): lo stato non sopravvivera' al riavvio");
+                try
+                {
+                    if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+                        Directory.CreateDirectory(directory);
+
+                    File.WriteAllText(temp, ToJson(), new UTF8Encoding(false));
+                    if (File.Exists(_path)) File.Replace(temp, _path, null);
+                    else File.Move(temp, _path);
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    failure = ex;
+                    _log.Log("stato: scrittura di " + _path + " non riuscita (tentativo "
+                             + (attempt + 1) + " di 2): " + ex.GetType().Name + ": " + ex.Message);
+                }
             }
+
+            _log.Log("stato: non riesco a scrivere " + _path + " (" + failure.GetType().Name
+                     + ": " + failure.Message + "): lo stato non sopravvivera' al riavvio");
+            throw new IOException("stato non salvato in " + _path + " (" + failure.GetType().Name
+                + ": " + failure.Message + ")", failure);
         }
 
         /// <summary>Serializza i valori come oggetto JSON, con l'escaping necessario.</summary>
