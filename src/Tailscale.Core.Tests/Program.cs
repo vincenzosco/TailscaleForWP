@@ -37,6 +37,8 @@ namespace Tailscale.Core.Tests
             Run("log file", TextFileLogTests.Run);
             Run("ciclo del motore", EngineRunStateTests.Run);
             Run("pulsante principale", PrimaryButtonPolicyTests.Run);
+            Run("manifest interop", InteropManifestTests.Run);
+            Run("vpn via interop", VpnLinkTests.Run);
 
             Console.WriteLine(T.Failures == 0 ? "ALL PASS" : "FAILURES: " + T.Failures);
             return T.Failures;

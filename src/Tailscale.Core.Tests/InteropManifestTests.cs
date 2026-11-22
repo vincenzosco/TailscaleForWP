@@ -1,0 +1,187 @@
+using System;
+
+namespace Tailscale.Core.Tests
+{
+    /// <summary>
+    /// Il manifest e' la porta fra chi configura e chi scrive: una riga sbagliata
+    /// deve dire la riga, e un path fuori dalla whitelist deve essere rifiutato
+    /// con il path nel messaggio. Il caso che questi test difendono e' il terzo
+    /// del piano 3: un valore di sistema scritto "per provare" e' un guasto, non
+    /// un tentativo.
+    /// </summary>
+    public static class InteropManifestTests
+    {
+        public static void Run()
+        {
+            Case("manifest: il default ha connection, on e off", TheDefaultHasThreeSections);
+            Case("manifest: commenti e righe vuote si saltano", CommentsAndBlankLinesAreSkipped);
+            Case("manifest: i due punti nel valore restano nel valore", ColonsStayInTheValue);
+            Case("manifest: una riga malformata dice la riga", ABadLineNamesItsLine);
+            Case("manifest: una sezione sconosciuta ferma tutto", AnUnknownSectionStopsTheParser);
+            Case("manifest: un path fuori whitelist e' rifiutato con il path", AnOutsidePathIsRefusedWithItsPath);
+            Case("whitelist: le sottochiavi delle radici concesse passano", SubKeysOfAllowedRootsPass);
+            Case("valore: forma tipo:testo e uguaglianza", ValueShapeAndEquality);
+            Case("valore: dword in hex e decimale sono lo stesso valore", HexAndDecimalDwordsAreEqual);
+            Case("reg query: l'output diventa un valore", RegQueryOutputBecomesAValue);
+        }
+
+        private static void Case(string name, Action test)
+        {
+            try
+            {
+                test();
+            }
+            catch (Exception ex)
+            {
+                T.Failures++;
+                Console.WriteLine("FAIL " + name + ": " + ex.GetType().Name + ": " + ex.Message);
+            }
+        }
+
+        private static void TheDefaultHasThreeSections()
+        {
+            InteropPlan plan = InteropManifest.Parse(InteropManifest.Default);
+
+            T.Eq(1, plan.Connection.Count, "manifest default: una voce di connessione");
+            T.Eq(1, plan.On.Count, "manifest default: una voce di attivazione");
+            T.Eq(1, plan.Off.Count, "manifest default: una voce di disattivazione");
+            T.Eq("HKLM\\SOFTWARE\\TailscaleWP\\VpnLink", plan.On[0].FullName,
+                 "manifest default: la voce di attivazione sta nella chiave dell'app");
+            T.Eq("sz:on", plan.On[0].Value.ToString(), "manifest default: il valore di attivazione");
+        }
+
+        private static void CommentsAndBlankLinesAreSkipped()
+        {
+            InteropPlan plan = InteropManifest.Parse(
+                "# intestazione\n\n[on]\n\n# voce commentata\nHKLM|SOFTWARE\\TailscaleWP|A|sz:1\n");
+
+            T.Eq(1, plan.On.Count, "manifest: solo le righe di valore contano");
+            T.Eq(0, plan.Connection.Count, "manifest: sezione non dichiarata resta vuota");
+        }
+
+        private static void ColonsStayInTheValue()
+        {
+            InteropPlan plan = InteropManifest.Parse(
+                "[on]\r\nHKLM|SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Internet Settings|ProxyServer|sz:127.0.0.1:1080\r\n"
+                + "HKLM|SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Internet Settings|ProxyEnable|dword:1\r\n");
+
+            T.Eq("127.0.0.1:1080", plan.On[0].Value.Text, "manifest: i due punti dell'indirizzo restano nel valore");
+            T.Eq("dword", plan.On[1].Value.Kind, "manifest: il tipo dword si riconosce");
+            T.Eq("1", plan.On[1].Value.Text, "manifest: il valore dword resta testo");
+        }
+
+        private static void ABadLineNamesItsLine()
+        {
+            string caught = null;
+            try
+            {
+                InteropManifest.Parse("[on]\nHKLM|SOFTWARE\\TailscaleWP|A|sz:1\nsenza separatori\n");
+            }
+            catch (FormatException ex)
+            {
+                caught = ex.Message;
+            }
+            T.True(caught != null, "manifest: una riga malformata e' un errore");
+            T.True(caught != null && caught.Contains("riga 3"),
+                   "manifest: il messaggio dice la riga sbagliata (" + caught + ")");
+        }
+
+        private static void AnUnknownSectionStopsTheParser()
+        {
+            string caught = null;
+            try
+            {
+                InteropManifest.Parse("[on]\nHKLM|SOFTWARE\\TailscaleWP|A|sz:1\n[altro]\n");
+            }
+            catch (FormatException ex)
+            {
+                caught = ex.Message;
+            }
+            T.True(caught != null && caught.Contains("riga 3"),
+                   "manifest: la sezione sconosciuta dice la riga (" + caught + ")");
+        }
+
+        private static void AnOutsidePathIsRefusedWithItsPath()
+        {
+            string caught = null;
+            try
+            {
+                InteropManifest.Parse("[on]\nHKLM|SYSTEM\\CurrentControlSet\\Services|Qualcosa|sz:1\n");
+            }
+            catch (ArgumentException ex)
+            {
+                caught = ex.Message;
+            }
+            T.True(caught != null, "manifest: un path fuori whitelist e' un errore");
+            T.True(caught != null && caught.Contains("SYSTEM\\CurrentControlSet\\Services"),
+                   "manifest: il messaggio contiene il path rifiutato (" + caught + ")");
+        }
+
+        private static void SubKeysOfAllowedRootsPass()
+        {
+            T.True(InteropWhitelist.IsAllowed("HKLM", "SOFTWARE\\TailscaleWP\\Sottochiave"),
+                   "whitelist: la sottochiave dell'app e' ammessa");
+            T.True(InteropWhitelist.IsAllowed("HKLM", "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Internet Settings"),
+                   "whitelist: il proxy di sistema e' ammesso");
+            T.False(InteropWhitelist.IsAllowed("HKLM", "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"),
+                    "whitelist: l'autostart di sistema non e' ammesso (serve la discovery)");
+            T.False(InteropWhitelist.IsAllowed("HKLM", "SYSTEM\\CurrentControlSet"),
+                    "whitelist: il resto del registro di sistema non e' ammesso");
+            T.False(InteropWhitelist.IsAllowed("HKU", "SOFTWARE\\TailscaleWP"),
+                    "whitelist: gli altri alveari non sono ammessi");
+        }
+
+        private static void ValueShapeAndEquality()
+        {
+            T.Eq("sz:ciao", RegValue.Parse("sz:ciao").ToString(), "valore: sz va e torna");
+            T.Eq("42", RegValue.Parse("dword:42").Text, "valore: dword va e torna");
+            T.True(new RegValue("sz", "a").Equals(RegValue.Parse("sz:a")), "valore: due valori uguali sono uguali");
+            T.False(new RegValue("sz", "1").Equals(RegValue.Parse("dword:1")), "valore: tipi diversi non sono uguali");
+
+            string caught = null;
+            try { RegValue.Parse("senzaduepunti"); }
+            catch (FormatException ex) { caught = ex.Message; }
+            T.True(caught != null, "valore: senza i due punti e' un errore");
+        }
+
+        private static void HexAndDecimalDwordsAreEqual()
+        {
+            T.Eq("1", RegValue.Parse("dword:0x1").Text, "valore: l'hex diventa decimale");
+            T.True(RegValue.Parse("dword:0x1").Equals(RegValue.Parse("dword:1")),
+                   "valore: dword:0x1 e dword:1 sono lo stesso valore");
+
+            string caught = null;
+            try { new RegValue("dword", "nonUnNumero"); }
+            catch (ArgumentException ex) { caught = ex.Message; }
+            T.True(caught != null, "valore: un dword non numerico e' un errore");
+        }
+
+        private static void RegQueryOutputBecomesAValue()
+        {
+            RegValue value;
+            T.True(RegQueryParser.TryParseValue(
+                       "HKEY_LOCAL_MACHINE\\SOFTWARE\\TailscaleWP\r\n    VpnLink    REG_SZ    on\r\n",
+                       "VpnLink", out value),
+                   "reg query: una riga REG_SZ si legge");
+            T.Eq("on", value.Text, "reg query: il valore torna intero");
+
+            T.True(RegQueryParser.TryParseValue(
+                       "    ProxyEnable    REG_DWORD    0x1\r\n",
+                       "ProxyEnable", out value),
+                   "reg query: una riga REG_DWORD si legge");
+            T.Eq("1", value.Text, "reg query: il dword hex diventa decimale");
+
+            T.True(RegQueryParser.TryParseValue(
+                       "    ProxyServer    REG_SZ    127.0.0.1:1080\r\n",
+                       "ProxyServer", out value),
+                   "reg query: un valore con i due punti resta intero");
+            T.Eq("127.0.0.1:1080", value.Text, "reg query: il valore con i due punti");
+
+            T.False(RegQueryParser.TryParseValue(
+                        "    Altro    REG_SZ    x\r\n", "VpnLink", out value),
+                    "reg query: il valore cercato e non presente e' false");
+            T.False(RegQueryParser.TryParseValue(null, "VpnLink", out value),
+                    "reg query: output nullo e' false");
+        }
+    }
+}
