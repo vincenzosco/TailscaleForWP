@@ -118,17 +118,19 @@ namespace Tailscale.Native
                 if (status == StatusObjectNameNotFound) return false;
                 Check(status, "NtQueryValueKey", hive, path, name);
 
-                // KEY_VALUE_PARTIAL_INFORMATION: TitleIndex (4 byte), Type (4),
-                // DataLength (4), DataOffset (4), poi i dati a DataOffset.
+                // KEY_VALUE_PARTIAL_INFORMATION di winternl.h: TitleIndex (4
+                // byte), Type (4), DataLength (4), poi i dati. I dati iniziano a
+                // offset 12 e vanno per DataLength byte: la struttura non ha
+                // nessun campo DataOffset, e leggere a offset 12 come se ci fosse
+                // prenderebbe i primi byte del dato per una posizione.
                 int type = BitConverter.ToInt32(information, 4);
                 int dataLength = BitConverter.ToInt32(information, 8);
-                int dataOffset = BitConverter.ToInt32(information, 12);
 
                 if (type == RegSz)
                 {
                     // Il testo e' Unicode; il terminatore, quando c'e', non fa
                     // parte del valore.
-                    string text = Encoding.Unicode.GetString(information, dataOffset, dataLength);
+                    string text = Encoding.Unicode.GetString(information, 12, dataLength);
                     int end = text.Length;
                     while (end > 0 && text[end - 1] == '\0') end--;
                     if (end != text.Length) text = text.Substring(0, end);
@@ -137,7 +139,7 @@ namespace Tailscale.Native
                 }
                 if (type == RegDword)
                 {
-                    uint number = BitConverter.ToUInt32(information, dataOffset);
+                    uint number = BitConverter.ToUInt32(information, 12);
                     value = new RegValue(RegValue.Dword, number.ToString());
                     return true;
                 }

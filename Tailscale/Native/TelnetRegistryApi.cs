@@ -60,7 +60,14 @@ namespace Tailscale.Native
                 EnsureConnected();
 
                 _writer.WriteString(command + "\r\n");
-                _writer.StoreAsync().AsTask().Wait(ConnectTimeoutMs);
+                if (!_writer.StoreAsync().AsTask().Wait(ConnectTimeoutMs))
+                {
+                    // Anche una scrittura scaduta lascia la connessione a meta':
+                    // si butta via il socket e si dice, invece di leggere a vuoto.
+                    Reset();
+                    throw new InvalidOperationException("telnet non raggiungibile su " + _host + ":" + _port
+                                                        + " (scrittura scaduta)");
+                }
 
                 List<byte> collected = new List<byte>();
                 DateTime ceiling = DateTime.UtcNow.AddMilliseconds(AnswerCeilingMs);
@@ -82,7 +89,10 @@ namespace Tailscale.Native
             StreamSocket socket = new StreamSocket();
             try
             {
-                socket.ConnectAsync(new HostName(_host), _port).AsTask().Wait(ConnectTimeoutMs);
+                // Un'attesa scaduta non e' un'eccezione: senza questo controllo il
+                // socket resta appeso a meta' e la risposta diventa il vuoto.
+                if (!socket.ConnectAsync(new HostName(_host), _port).AsTask().Wait(ConnectTimeoutMs))
+                    throw new TimeoutException("connessione scaduta dopo " + ConnectTimeoutMs + " ms");
             }
             catch (Exception ex)
             {
@@ -137,9 +147,9 @@ namespace Tailscale.Native
 
         /// <summary>
         /// Toglie la negoziazione telnet e tiene il testo. I byte 0xFF aprono una
-        /// sequenza di comando (WILL/WONT/DO/DONT piu' un'opzione, oppure una
-        /// subnegoziazione fino a 0xFF 0xF0): non sono testo e non devono finire
-        /// nella risposta che il parser legge.
+        /// sequenza di comando: WILL/WONT/DO/DONT piu' un'opzione, un comando a
+        /// due byte (NOP..GA), oppure una subnegoziazione fino a 0xFF 0xF0. Non
+        /// sono testo e non devono finire nella risposta che il parser legge.
         /// </summary>
         internal static string Decode(IList<byte> bytes)
         {
@@ -148,28 +158,41 @@ namespace Tailscale.Native
             while (i < bytes.Count)
             {
                 byte b = bytes[i];
-                if (b == 0xFF && i + 1 < bytes.Count)
+                if (b != 0xFF)
                 {
-                    byte command = bytes[i + 1];
-                    if (command == 0xFA)
-                    {
-                        i += 2;
-                        while (i + 1 < bytes.Count && !(bytes[i] == 0xFF && bytes[i + 1] == 0xF0)) i++;
-                        i += 2;
-                        continue;
-                    }
-                    if (command == 0xFF)
-                    {
-                        // 0xFF 0xFF: un 0xFF letterale nel testo.
-                        text.Append((char)0xFF);
-                        i += 2;
-                        continue;
-                    }
-                    i += 3;  // WILL/WONT/DO/DONT piu' l'opzione
+                    text.Append((char)b);
+                    i++;
                     continue;
                 }
-                text.Append((char)b);
-                i++;
+
+                // Un IAC in coda, senza piu' niente dopo, non e' testo: si butta.
+                if (i + 1 >= bytes.Count) break;
+
+                byte command = bytes[i + 1];
+                if (command == 0xFA)
+                {
+                    // Subnegoziazione: fino a IAC SE (0xFF 0xF0).
+                    i += 2;
+                    while (i + 1 < bytes.Count && !(bytes[i] == 0xFF && bytes[i + 1] == 0xF0)) i++;
+                    i += 2;
+                    continue;
+                }
+                if (command == 0xFF)
+                {
+                    // 0xFF 0xFF: un 0xFF letterale nel testo.
+                    text.Append((char)0xFF);
+                    i += 2;
+                    continue;
+                }
+                if (command >= 0xFB && command <= 0xFE)
+                {
+                    // WILL/WONT/DO/DONT piu' l'opzione.
+                    i += 3;
+                    continue;
+                }
+                // NOP..GA e compagnia: comandi a due byte, senza opzione. Prima
+                // si saltavano tre byte e si inghiottiva un byte di testo vero.
+                i += 2;
             }
             return text.ToString();
         }
@@ -199,6 +222,9 @@ namespace Tailscale.Native
 
         public bool TryRead(string hive, string path, string name, out RegValue value)
         {
+            CheckShell(hive, "hive");
+            CheckShell(path, "percorso");
+            CheckShell(name, "nome del valore");
             string output = _shell.Execute("reg query \"" + Key(hive, path) + "\" /v \"" + name + "\"");
             if (RegQueryParser.TryParseValue(output, name, out value)) return true;
 
@@ -221,6 +247,10 @@ namespace Tailscale.Native
         public void Write(string hive, string path, string name, RegValue value)
         {
             if (value == null) throw new ArgumentNullException("value");
+            CheckShell(hive, "hive");
+            CheckShell(path, "percorso");
+            CheckShell(name, "nome del valore");
+            CheckShell(value.Text, "testo del valore");
             string type = value.Kind == RegValue.Dword ? "REG_DWORD" : "REG_SZ";
             string data = value.Kind == RegValue.Dword ? value.Text : "\"" + value.Text + "\"";
             string output = _shell.Execute("reg add \"" + Key(hive, path) + "\" /v \"" + name
@@ -232,6 +262,9 @@ namespace Tailscale.Native
 
         public void Delete(string hive, string path, string name)
         {
+            CheckShell(hive, "hive");
+            CheckShell(path, "percorso");
+            CheckShell(name, "nome del valore");
             string output = _shell.Execute("reg delete \"" + Key(hive, path) + "\" /v \"" + name + "\" /f");
             // Il valore che non c'e' e' gia' nello stato desiderato: non e' un
             // errore. Un rifiuto vero (accesso negato) lo e'.
@@ -244,6 +277,36 @@ namespace Tailscale.Native
         {
             return hive + "\\" + path;
         }
+
+        /// <summary>
+        /// Prima di comporre un comando, ogni testo che ci finisce dentro passa
+        /// un vaglio stretto: nel guscio una `"` esce dalle virgolette e una `&`,
+        /// una `|` o una `%` comandano, con i diritti di CMD Injector — e nomi e
+        /// testi arrivano anche dal registro, nel ripristino. La regola e' una
+        /// lista di cio' che e' ammesso (lettere, cifre, spazio e punteggiatura
+        /// che non comanda niente): tutto il resto si rifiuta e il comando non
+        /// viene composto. Il messaggio nomina il campo, mai il testo: nei log
+        /// non vanno i contenuti.
+        /// </summary>
+        private static void CheckShell(string text, string what)
+        {
+            if (text == null) throw new ArgumentNullException(what);
+            for (int i = 0; i < text.Length; i++)
+            {
+                char c = text[i];
+                bool ok = c == ' '
+                    || (c >= '0' && c <= '9')
+                    || (c >= 'A' && c <= 'Z')
+                    || (c >= 'a' && c <= 'z')
+                    || SafeShellChars.IndexOf(c) >= 0;
+                if (!ok)
+                    throw new ArgumentException(what
+                        + " con caratteri che nel guscio comandano: si rifiuta, nessun comando composto");
+            }
+        }
+
+        /// <summary>La punteggiatura che nel guscio non comanda niente.</summary>
+        private const string SafeShellChars = ".,:;=+-_/\\()[]{}@#!?'*~";
 
         private static bool IsError(string output)
         {
