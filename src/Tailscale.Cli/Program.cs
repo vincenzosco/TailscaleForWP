@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Security.Cryptography;
 using Tailscale.Core;
 using Tailscale.Core.Keys;
@@ -51,6 +52,12 @@ namespace Tailscale.Cli
                     return CommandProbe.Run(log);
                 case "selftest":
                     return CommandSelfTest.Run();
+                case "provision":
+                    // provision [manifest] [cartella]: senza argomenti usa il
+                    // manifest integrato e scrive in provisioning\out.
+                    return CommandProvision.Run(log,
+                        args.Length > 1 ? args[1] : null,
+                        args.Length > 2 ? args[2] : Path.Combine("provisioning", "out"));
                 case "help":
                     PrintHelp();
                     return 0;
@@ -68,6 +75,8 @@ namespace Tailscale.Cli
             Console.WriteLine("  handshake   contatta il control server, complete l'handshake Noise ts2021");
             Console.WriteLine("  login       registra il nodo e attende l'autorizzazione (stampa l'URL di login)");
             Console.WriteLine("  selftest    controlli offline (nessuna rete): parser delle chiavi e richiesta");
+            Console.WriteLine("  provision   genera provision.bat e deprovision.bat per CMD Injector");
+            Console.WriteLine("              (manifest opzionale come argomento, cartella di uscita opzionale)");
             Console.WriteLine("  help        questo messaggio");
             Console.WriteLine();
             Console.WriteLine("Le chiavi private non vengono mai stampate.");
