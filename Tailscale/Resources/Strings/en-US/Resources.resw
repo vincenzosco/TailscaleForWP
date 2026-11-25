@@ -86,7 +86,7 @@
     <value>VPN link: not configured yet</value>
   </data>
   <data name="Vpn_Status_Locked" xml:space="preserve">
-    <value>VPN link: not available, this phone has no interop unlock</value>
+    <value>VPN: needs CMD Injector (telnet). Without it the app has no registry channel: direct access is denied even with interop</value>
   </data>
   <data name="Vpn_Status_Unknown" xml:space="preserve">
     <value>VPN link: registry access not verified, nothing is written</value>

@@ -86,7 +86,7 @@
     <value>VPN: non ancora configurata</value>
   </data>
   <data name="Vpn_Status_Locked" xml:space="preserve">
-    <value>VPN: non disponibile, questo telefono non ha l'interop unlock</value>
+    <value>VPN: serve CMD Injector (telnet). Senza, l'app non ha canali al registro: il diretto e' negato anche con l'interop</value>
   </data>
   <data name="Vpn_Status_Unknown" xml:space="preserve">
     <value>VPN: accesso al registro non verificato, non si scrive niente</value>
