@@ -15,7 +15,7 @@ namespace Tailscale.Core
         /// <summary>Attivato: i valori [on] sono al loro posto, verificati rileggendoli.</summary>
         On,
 
-        /// <summary>Il canale nativo non e' disponibile: nessuna scrittura tentata.</summary>
+        /// <summary>Il canale di registro non e' disponibile: nessuna scrittura tentata.</summary>
         Unavailable,
 
         /// <summary>L'accesso al registro non si e' verificato: nessuna scrittura tentata.</summary>
@@ -84,6 +84,11 @@ namespace Tailscale.Core
                     if (Matches(_plan.On)) { _state = VpnLinkState.On; return; }
                     if (Matches(_plan.Off)) { _state = VpnLinkState.Off; return; }
                     _state = VpnLinkState.NotConfigured;
+                }
+                catch (RegistryChannelUnavailableException)
+                {
+                    // Il canale non c'e': la causa si sa e lo stato la dice.
+                    _state = VpnLinkState.Unavailable;
                 }
                 catch (Exception)
                 {
@@ -176,7 +181,7 @@ namespace Tailscale.Core
             if (capability == InteropCapability.Unavailable)
             {
                 _state = VpnLinkState.Unavailable;
-                _log.Log("vpn: canale nativo non disponibile, nessuna scrittura"
+                _log.Log("vpn: canale non disponibile, nessuna scrittura"
                          + (failure == null ? "" : " (" + failure + ")"));
                 return false;
             }

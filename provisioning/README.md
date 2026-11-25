@@ -13,7 +13,7 @@ illudere nessuno.
 
 | Canale | Chi lo usa | Quando |
 |---|---|---|
-| L'app (telnet a `127.0.0.1:23`, oppure registro diretto via P/Invoke) | l'utente, dal pulsante nella pagina | tutto in una volta: aggiunge, attiva, disattiva, conferma |
+| L'app (telnet a `127.0.0.1:23`, dentro CMD Injector) | l'utente, dal pulsante nella pagina | tutto in una volta: aggiunge, attiva, disattiva, conferma |
 | `provision.bat` / `deprovision.bat` | l'utente, da CMD Injector o da una shell via telnet | quando l'app non ha i diritti, o per il provisioning iniziale |
 
 Gli stessi valori, nello stesso ordine: il manifest. Due posti dove si legge, e

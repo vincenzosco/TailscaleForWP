@@ -123,11 +123,13 @@ only touches `HKLM\SOFTWARE\TailscaleWP`), and the same manifest generates the
 `provision.bat` payload for CMD Injector: see
 [provisioning/README.md](provisioning/README.md).
 
-The WP8.1 Runtime package requests `ID_CAP_INTEROPSERVICES` through
-`Tailscale/WindowsPhoneReservedAppInfo.xml`; putting it in
-`Package.appxmanifest` is rejected by the AppX schema. This reserved capability
-metadata is for local sideload/development and does not itself grant registry
-writes or replace CMD Injector.
+The package requests no reserved capability: the direct registry channel is
+gone on purpose. The only automatic path is `reg.exe` run inside CMD Injector,
+reached over a local Telnet connection to `127.0.0.1:23`: one command line per
+request, the response read until the connection goes quiet, telnet option bytes
+stripped before parsing `reg.exe` output. The channel is probed at runtime with
+a write, read-back and delete of a test value under `HKLM\SOFTWARE\TailscaleWP`;
+without a verified probe nothing is written and the button says so.
 
 > **The app cannot write the registry from its own sandbox**, not even on an
 > interop-unlocked phone. The automatic path needs CMD Injector installed and
@@ -184,12 +186,12 @@ identity survives.
 <summary><strong>The VPN button reports an interop or registry error</strong></summary>
 <br>
 
-The app can distinguish an unavailable direct ntdll channel from a denied
-registry command and from other telnet errors. In `registro.log`, look for
-`vpn: telnet presente ma probe non verificato` or `vpn: accesso diretto non
-verificato`; the reason is recorded without registry values. A reachable CMD
-Injector telnet service does not by itself prove that `reg.exe` can write the
-required key.
+The app can distinguish an unreachable CMD Injector from a denied registry
+command and from other telnet errors. In `registro.log`, look for
+`vpn: telnet non raggiungibile`, `vpn: telnet presente ma probe non verificato`
+or `vpn: telnet risponde ma CMD Injector non ha accesso al registro`; the reason
+is recorded without registry values. A reachable CMD Injector telnet service
+does not by itself prove that `reg.exe` can write the required key.
 
 </details>
 
@@ -333,11 +335,14 @@ manifest integrato tocca solo `HKLM\SOFTWARE\TailscaleWP`), e lo stesso manifest
 genera il payload `provision.bat` per CMD Injector: vedi
 [provisioning/README.md](provisioning/README.md).
 
-Il pacchetto WP8.1 Runtime richiede `ID_CAP_INTEROPSERVICES` tramite
-`Tailscale/WindowsPhoneReservedAppInfo.xml`; inserirla in
-`Package.appxmanifest` viene rifiutato dallo schema AppX. Questi metadati di
-capability riservata servono per installazione locale e sviluppo: da soli non
-autorizzano la scrittura del registro e non sostituiscono CMD Injector.
+Il pacchetto non richiede alcuna capability riservata: il canale diretto al
+registro è stato tolto di proposito. L'unico percorso automatico è `reg.exe`
+girato dentro CMD Injector, raggiunto con una connessione Telnet locale su
+`127.0.0.1:23`: un comando per riga, risposta letta fino al silenzio della
+connessione, byte di opzione telnet scartati prima di leggere l'output di
+`reg.exe`. Il canale viene verificato a runtime con scrittura, rilettura e
+cancellazione di un valore di prova in `HKLM\SOFTWARE\TailscaleWP`; senza probe
+verificato non si scrive niente e il pulsante lo dice.
 
 > **L'app non può scrivere il registro dalla propria sandbox**, nemmeno con
 > l'interop unlock. Il percorso automatico richiede CMD Injector installato e
@@ -395,11 +400,12 @@ l'identità sopravvive.
 <summary><strong>Il pulsante VPN segnala un errore di interop o del registro</strong></summary>
 <br>
 
-L'app distingue un canale ntdll diretto non disponibile, un comando di registro
-negato e gli altri errori telnet. In `registro.log`, cerca `vpn: telnet presente
-ma probe non verificato` o `vpn: accesso diretto non verificato`; la causa è
-registrata senza valori del registro. Il fatto che CMD Injector risponda via
-telnet non dimostra da solo che `reg.exe` possa scrivere la chiave richiesta.
+L'app distingue CMD Injector irraggiungibile, un comando di registro negato e
+gli altri errori telnet. In `registro.log`, cerca `vpn: telnet non
+raggiungibile`, `vpn: telnet presente ma probe non verificato` o `vpn: telnet
+risponde ma CMD Injector non ha accesso al registro`; la causa è registrata
+senza valori del registro. Il fatto che CMD Injector risponda via telnet non
+dimostra da solo che `reg.exe` possa scrivere la chiave richiesta.
 
 </details>
 

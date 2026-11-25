@@ -24,7 +24,9 @@ namespace Tailscale.Core.Tests
             Case("vpn: connect due volte non sovrascrive il backup", ConnectTwiceKeepsTheFirstBackup);
             Case("vpn: una scrittura non confermata e' un fallimento", AnUnconfirmedWriteFails);
             Case("vpn: accesso negato non dimostra interop bloccato", AccessDeniedProbeIsUnknown);
-            Case("vpn: canale nativo assente non scrive", NativeChannelUnavailableWritesNothing);
+            Case("vpn: canale assente non scrive", ChannelUnavailableWritesNothing);
+            Case("vpn: canale assente e' Unavailable, non Unknown", ChannelUnavailableIsUnavailable);
+            Case("vpn: refresh con canale assente e' Unavailable", ChannelUnavailableRefreshIsUnavailable);
             Case("vpn: errore inatteso del probe non scrive", UnexpectedProbeErrorWritesNothing);
             Case("vpn: probe incoerente, nessuna scrittura", AnIncoherentProbeWritesNothing);
             Case("vpn: disconnect disattiva e lo stato si rilegge", DisconnectDeactivates);
@@ -119,18 +121,43 @@ namespace Tailscale.Core.Tests
                    "vpn: il probe espone il tipo di errore senza valore di registro");
         }
 
-        private static void NativeChannelUnavailableWritesNothing()
+        private static void ChannelUnavailableWritesNothing()
         {
             FakeRegistry registry = new FakeRegistry();
-            registry.FailWrites = true;
-            registry.MissingNativeApi = true;
+            registry.MissingChannel = true;
             VpnLink link = NewLink(registry, new MemoryStateStore());
 
             link.Connect();
 
             T.Eq(VpnLinkState.Unavailable.ToString(), link.State.ToString(),
-                 "vpn: API nativa assente produce Unavailable");
-            T.Eq(0, registry.PlanWrites, "vpn: API assente, nessun valore del piano scritto");
+                 "vpn: canale assente produce Unavailable");
+            T.Eq(0, registry.PlanWrites, "vpn: canale assente, nessun valore del piano scritto");
+        }
+
+        private static void ChannelUnavailableIsUnavailable()
+        {
+            FakeRegistry registry = new FakeRegistry();
+            registry.MissingChannel = true;
+            string failure;
+
+            InteropCapability capability = InteropProbe.Detect(registry, out failure);
+
+            T.Eq(InteropCapability.Unavailable.ToString(), capability.ToString(),
+                 "vpn: canale assente e' Unavailable");
+            T.True(failure != null && failure.Contains("canale non disponibile"),
+                   "vpn: il motivo dice cosa manca, senza valori di registro");
+        }
+
+        private static void ChannelUnavailableRefreshIsUnavailable()
+        {
+            FakeRegistry registry = new FakeRegistry();
+            registry.MissingChannel = true;
+            VpnLink link = NewLink(registry, new MemoryStateStore());
+
+            link.Refresh();
+
+            T.Eq(VpnLinkState.Unavailable.ToString(), link.State.ToString(),
+                 "vpn: rilettura con canale assente e' Unavailable, non Unknown");
         }
 
         private static void UnexpectedProbeErrorWritesNothing()
@@ -330,7 +357,7 @@ namespace Tailscale.Core.Tests
         private readonly object _gate = new object();
 
         public bool FailWrites;
-        public bool MissingNativeApi;
+        public bool MissingChannel;
         public bool FailUnexpectedly;
         public bool LieOnRead;
         public bool LieOnProbe;
@@ -344,6 +371,7 @@ namespace Tailscale.Core.Tests
 
         public bool TryRead(string hive, string path, string name, out RegValue value)
         {
+            if (MissingChannel) throw new RegistryChannelUnavailableException("canale non disponibile");
             lock (_gate)
             {
                 RegValue stored;
@@ -372,7 +400,7 @@ namespace Tailscale.Core.Tests
         {
             lock (_gate)
             {
-                if (MissingNativeApi) throw new DllNotFoundException("ntdll non disponibile");
+                if (MissingChannel) throw new RegistryChannelUnavailableException("canale non disponibile");
                 if (FailUnexpectedly) throw new InvalidOperationException("errore simulato");
                 if (FailWrites) throw new UnauthorizedAccessException("registro bloccato");
                 _values[Key(hive, path, name)] = value;
@@ -383,6 +411,7 @@ namespace Tailscale.Core.Tests
 
         public void Delete(string hive, string path, string name)
         {
+            if (MissingChannel) throw new RegistryChannelUnavailableException("canale non disponibile");
             lock (_gate)
             {
                 if (FailWrites) throw new UnauthorizedAccessException("registro bloccato");

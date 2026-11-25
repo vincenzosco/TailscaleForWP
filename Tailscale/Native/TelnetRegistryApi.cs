@@ -65,7 +65,9 @@ namespace Tailscale.Native
                     // Anche una scrittura scaduta lascia la connessione a meta':
                     // si butta via il socket e si dice, invece di leggere a vuoto.
                     Reset();
-                    throw new InvalidOperationException("telnet non raggiungibile su " + _host + ":" + _port
+                    // Il canale non porta comandi: manca lo strumento, non il
+                    // permesso. Il probe lo legge come canale assente.
+                    throw new RegistryChannelUnavailableException("telnet non raggiungibile su " + _host + ":" + _port
                                                         + " (scrittura scaduta)");
                 }
 
@@ -97,10 +99,11 @@ namespace Tailscale.Native
             catch (Exception ex)
             {
                 // Un'attesa scaduta lascia la connessione a meta': si butta via il
-                // socket invece di riutilizzarne uno incerto.
+                // socket invece di riutilizzarne uno incerto. Il guscio non c'e'
+                // (CMD Injector non gira): manca lo strumento, non il permesso.
                 try { socket.Dispose(); }
                 catch (Exception) { }
-                throw new InvalidOperationException("telnet non raggiungibile su " + _host + ":" + _port
+                throw new RegistryChannelUnavailableException("telnet non raggiungibile su " + _host + ":" + _port
                                                     + " (" + ex.GetType().Name + ")");
             }
 

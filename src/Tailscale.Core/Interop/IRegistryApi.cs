@@ -124,10 +124,23 @@ namespace Tailscale.Core
     }
 
     /// <summary>
+    /// Il canale dietro un IRegistryApi non esiste in questa installazione:
+    /// niente telnet raggiungibile su cui girare reg.exe. Non e' un interdetto
+    /// del registro (quello e' UnauthorizedAccessException): manca proprio lo
+    /// strumento. Ogni adattatore la lancia quando il suo trasporto non c'e',
+    /// cosi' il core puo' distinguere "non si puo'" da "non si sa" senza
+    /// conoscere il trasporto.
+    /// </summary>
+    public class RegistryChannelUnavailableException : InvalidOperationException
+    {
+        public RegistryChannelUnavailableException(string message) : base(message) { }
+    }
+
+    /// <summary>
     /// Le quattro operazioni di registro che il core sa chiedere. Dietro ci sono
-    /// implementazioni diverse (P/Invoke sul telefono, reg.exe via telnet per CMD
-    /// Injector, memoria nei test) e il core non sa quale stia usando: e' il
-    /// motivo per cui l'accesso e' un'interfaccia e non una chiamata diretta.
+    /// implementazioni diverse (reg.exe via telnet per CMD Injector, memoria nei
+    /// test) e il core non sa quale stia usando: e' il motivo per cui l'accesso
+    /// e' un'interfaccia e non una chiamata diretta.
     /// </summary>
     public interface IRegistryApi
     {

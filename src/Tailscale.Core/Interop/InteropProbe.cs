@@ -3,7 +3,7 @@ using System;
 namespace Tailscale.Core
 {
     /// <summary>
-    /// Quanto il canale scelto lascia fare al registro: verificato, API nativa
+    /// Quanto il canale scelto lascia fare al registro: verificato, canale
     /// assente, oppure non verificato. Un accesso negato non distingue un sistema
     /// interop-locked dalla sandbox dell'app, quindi non viene presentato come
     /// prova che il telefono sia bloccato.
@@ -72,19 +72,19 @@ namespace Tailscale.Core
                 failure = Describe(ex);
                 return InteropCapability.Unknown;
             }
-            catch (DllNotFoundException ex)
+            catch (RegistryChannelUnavailableException ex)
             {
+                // Il canale non esiste qui: niente telnet raggiungibile su cui
+                // girare reg.exe. Non e' un interdetto del registro, manca lo
+                // strumento: lo stato e' noto e si chiama Unavailable.
                 failure = Describe(ex);
                 return InteropCapability.Unavailable;
             }
             catch (Exception ex)
             {
-                // EntryPointNotFoundException non esiste nel profilo WP8.1, quindi
-                // non si puo' nominare in un catch: si riconosce dal nome del tipo.
-                // Un accesso negato resta Unknown, perche' puo' essere sandbox; solo
-                // l'assenza esplicita della DLL o dell'entry point e' Unavailable.
+                // Tutto il resto non prova niente: un accesso negato resta
+                // Unknown, perche' puo' essere la sandbox dell'app.
                 failure = Describe(ex);
-                if (ex.GetType().Name == "EntryPointNotFoundException") return InteropCapability.Unavailable;
                 return InteropCapability.Unknown;
             }
         }

@@ -14,16 +14,11 @@ namespace Tailscale.Services
     /// collegamento parte da solo (se l'interruttore e' acceso), e il pulsante
     /// della pagina lo attiva e lo disattiva.
     ///
-    /// I canali sono due, in ordine:
-    ///
-    /// 1. **telnet** (127.0.0.1): CMD Injector espone i comandi come servizio e i
-    ///    `reg` girano con i diritti che servono. E' il canale "via telnet
-    ///    cmdinjector".
-    /// 2. **registro diretto** via P/Invoke su ntdll, se l'API e' disponibile e
-    ///    i permessi del processo consentono la scrittura.
-    ///
-    /// Se nessuno dei due funziona non si scrive niente e la pagina lo dice: il
-    /// provisioning manuale resta `provision.bat` eseguito da CMD Injector.
+    /// Un solo canale automatico: **telnet** (127.0.0.1:23), cioe' `reg` girato
+    /// dentro CMD Injector con i diritti che servono. L'app non scrive il registro
+    /// dalla propria sandbox e non ha altre strade: se il probe non passa non si
+    /// scrive niente e la pagina lo dice, e il provisioning manuale resta
+    /// `provision.bat` eseguito da CMD Injector.
     ///
     /// Il manifest e' quello integrato, oppure `vpn-manifest.txt` nella cartella
     /// dell'app: con ISETool lo si copia dentro senza ricompilare, e diventa il
@@ -59,7 +54,7 @@ namespace Tailscale.Services
             get { lock (_gate) return _state; }
         }
 
-        /// <summary>Il canale che funziona ("telnet", "registro diretto") o la stringa vuota.</summary>
+        /// <summary>Il canale verificato ("telnet") o la stringa vuota se non ce n'e'.</summary>
         public string Channel
         {
             get { lock (_gate) return _channel == null ? "" : _channel; }
@@ -185,8 +180,9 @@ namespace Tailscale.Services
         }
 
         /// <summary>
-        /// Il canale da usare, scelto una volta sola: telnet se il guscio
-        /// risponde e sa scrivere, sennò il registro diretto, sennò niente.
+        /// L'unico canale automatico, scelto una volta sola: telnet dentro CMD
+        /// Injector, oppure niente. Il probe deve verificare il canale prima di
+        /// ogni scrittura: senza verifica non si scrive.
         /// </summary>
         private VpnLink EnsureLink()
         {
@@ -200,9 +196,9 @@ namespace Tailscale.Services
             try
             {
                 IRegistryApi telnet = new TelnetRegistryApi(new LocalTelnetShell(TelnetHost, TelnetPort));
-                string telnetFailure;
-                InteropCapability telnetCapability = InteropProbe.Detect(telnet, out telnetFailure);
-                if (telnetCapability == InteropCapability.Unlocked)
+                string failure;
+                InteropCapability capability = InteropProbe.Detect(telnet, out failure);
+                if (capability == InteropCapability.Unlocked)
                 {
                     _log.Log("vpn: canale telnet (" + TelnetHost + ":" + TelnetPort + ") verificato");
                     lock (_gate)
@@ -212,39 +208,14 @@ namespace Tailscale.Services
                         return _link;
                     }
                 }
-                string telnetReason = telnetFailure ?? telnetCapability.ToString();
-                if (telnetCapability == InteropCapability.Unknown
-                    && telnetReason.IndexOf("accesso negato", StringComparison.OrdinalIgnoreCase) >= 0)
+
+                string reason = failure ?? capability.ToString();
+                if (capability == InteropCapability.Unavailable)
+                    _log.Log("vpn: telnet non raggiungibile (" + reason + "), nessuna scrittura");
+                else if (reason.IndexOf("accesso negato", StringComparison.OrdinalIgnoreCase) >= 0)
                     _log.Log("vpn: telnet risponde ma CMD Injector non ha accesso al registro");
                 else
-                    _log.Log("vpn: telnet presente ma probe non verificato (" + telnetReason + ")");
-            }
-            catch (Exception ex)
-            {
-                _log.Log("vpn: telnet non disponibile (" + ex.GetType().Name + ")");
-            }
-
-            try
-            {
-                IRegistryApi direct = new NtRegistryApi();
-                string directFailure;
-                InteropCapability capability = InteropProbe.Detect(direct, out directFailure);
-                if (capability == InteropCapability.Unlocked)
-                {
-                    _log.Log("vpn: canale registro diretto (ntdll) verificato");
-                    lock (_gate)
-                    {
-                        _link = new VpnLink(direct, _log, plan, _store);
-                        _channel = "registro diretto";
-                        return _link;
-                    }
-                }
-
-                _log.Log(capability == InteropCapability.Unavailable
-                    ? "vpn: canale diretto non disponibile (" + (directFailure ?? "API ntdll")
-                      + "), nessuna scrittura"
-                    : "vpn: accesso diretto non verificato (" + (directFailure ?? "causa sconosciuta")
-                      + "), nessuna scrittura");
+                    _log.Log("vpn: telnet presente ma probe non verificato (" + reason + ")");
                 _log.Log("vpn: il provisioning manuale resta provision.bat eseguito da CMD Injector");
                 lock (_gate) _state = capability == InteropCapability.Unavailable
                     ? VpnLinkState.Unavailable
@@ -253,7 +224,9 @@ namespace Tailscale.Services
             }
             catch (Exception ex)
             {
-                _log.Log("vpn: registro diretto non utilizzabile (" + ex.GetType().Name + ": " + ex.Message + ")");
+                // Un guasto nuovo senza una riga di registro e' la cosa peggiore:
+                // il perche' resta nel log dell'app, senza valori del registro.
+                _log.Log("vpn: telnet non utilizzabile (" + ex.GetType().Name + ": " + ex.Message + ")");
                 lock (_gate) _state = VpnLinkState.Unknown;
                 return null;
             }

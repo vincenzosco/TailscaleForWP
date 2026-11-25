@@ -119,7 +119,8 @@ socket morto, ed è per questo che il client lo distingue.
 | `log:portachiavi: l'identita' non sopravvivera' al riavvio` | il portachiavi accetta la scrittura ma restituisce altro in lettura: il dispositivo apparirà nuovo a ogni avvio | non fatale, ma va riportato: il tailnet si riempie di dispositivi doppi |
 | `log:registro su file non disponibile: ` | il file del registro non è scrivibile: la diagnosi resta solo a schermo, e sparisce con l'app | dirlo quando si riporta il problema, perché le righe che mancano sono quelle |
 | `log:vpn: telnet presente ma probe non verificato (` | CMD Injector risponde, ma il probe non è riuscito; `Tailscale/Native/TelnetRegistryApi.cs` distingue accesso negato, parametro non valido e altri errori senza scrivere i valori | riportare la riga completa: accesso negato al canale telnet non prova che il telefono sia interop-locked |
-| `log:vpn: accesso diretto non verificato (` | il probe diretto è fallito senza provare che l'interop sia bloccato; può essere la sandbox dell'app o un errore ntdll | riportare tipo e HRESULT, senza aggiungere valori del registro |
+| `log:vpn: telnet risponde ma CMD Injector non ha accesso al registro` | reg.exe ha negato la scrittura: non prova che il telefono sia interop-locked, può essere la configurazione di CMD Injector | riportare tipo e HRESULT, senza aggiungere valori del registro |
+| `log:vpn: telnet non raggiungibile (` | CMD Injector non risponde su `127.0.0.1:23`: manca lo strumento, non il permesso; `Tailscale/Native/TelnetRegistryApi.cs` lo segnala come canale assente | avviare CMD Injector con i suoi prerequisiti (WP8.1, bootloader unlock, interop unlock) e riprovare; il provisioning manuale resta provision.bat |
 | `log:il motore e' ancora in uscita: aspetto che si liberi` | l'avvio ha trovato il motore occupato da un ciclo in uscita -- arresto chiesto adesso, o budget esaurito -- e aspetta che si liberi invece di rifiutare la richiesta (`src/Tailscale.Core/Util/EngineRunState.cs#RunWhenFree`) | nessuna: è la correzione del 2026-10-11 in azione. Se la segue `log:avvio del motore` ha aspettato il tempo giusto; se invece l'app resta ferma, il pulsante principale rimette in moto il motore |
 | `log:il motore e' gia' in moto: nessuna seconda partenza` | un avvio chiesto mentre un ciclo del motore gira ancora: il rifiuto è voluto (due client sullo stesso stato si contenderebbero la stessa chiave), e arriva solo dopo il margine di attesa (`src/Tailscale.Core/Util/EngineRunState.cs#RunWhenFree`) | nessuna: è una risposta, non un guasto. Se però l'app resta su "Accesso richiesto" con il motore fermo, il pulsante principale lo rimette in moto |
 
@@ -189,4 +190,4 @@ Per un confronto dal PC, la CLI stampa le stesse fasi:
 `src/Tailscale.Cli/bin/Release/Tailscale.Cli.exe probe`,
 `src/Tailscale.Cli/bin/Release/Tailscale.Cli.exe login`.
 
-Ultima verifica: 2026-10-11
+Ultima verifica: 2026-11-25

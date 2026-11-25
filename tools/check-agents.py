@@ -41,8 +41,11 @@ SKIP_PARTS = ("/bin/", "/obj/")
 # Strumenti dell'SDK, non del repository: si citano per nome nei comandi che
 # qualcuno deve eseguire (ISETool.exe tira fuori il registro del telefono,
 # AppDeployCmd.exe dispiega il pacchetto), e pretenderli qui vorrebbe dire
-# cancellare la procedura dalle skill per far passare il controllo.
-SKIP_SUBSTRINGS = ("Program Files", "AppDeployCmd.exe", "ISETool.exe")
+# cancellare la procedura dalle skill per far passare il controllo. Stesso
+# discorso per reg.exe (strumento di Windows, gira dentro CMD Injector) e per
+# i bat di provisioning (generati dal payload, non sono file del repository).
+SKIP_SUBSTRINGS = ("Program Files", "AppDeployCmd.exe", "ISETool.exe",
+                   "reg.exe", "provision.bat", "deprovision.bat")
 
 EXTENSIONS = ("cs", "md", "py", "cmd", "bat", "resw", "resx", "xaml", "lock", "sln",
               "csproj", "vbproj", "exe", "txt", "json")

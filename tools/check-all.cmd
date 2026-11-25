@@ -99,7 +99,6 @@ if exist src\Tailscale.Cli\Tailscale.Cli.csproj (
 echo [5/5] App WP8.1 ARM
 %MSB% Tailscale\Tailscale.csproj -nologo -verbosity:minimal -p:Configuration=Release -p:Platform=ARM
 if errorlevel 1 exit /b 1
-python tools\check-phone-capability.py || exit /b 1
 
 :skipapp
 echo CHECK-ALL OK

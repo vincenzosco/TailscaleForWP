@@ -86,7 +86,7 @@
     <value>VPN: non ancora configurata</value>
   </data>
   <data name="Vpn_Status_Unavailable" xml:space="preserve">
-    <value>VPN: canale diretto al registro non disponibile. Vedi il motivo nel registro dell'app</value>
+    <value>VPN: canale verso CMD Injector non disponibile. Vedi il motivo nel registro dell'app</value>
   </data>
   <data name="Vpn_Status_Unknown" xml:space="preserve">
     <value>VPN: accesso al registro non verificato, non si scrive niente</value>
