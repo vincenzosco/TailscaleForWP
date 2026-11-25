@@ -40,6 +40,7 @@ namespace Tailscale.Core.Tests
             Run("manifest interop", InteropManifestTests.Run);
             Run("vpn via interop", VpnLinkTests.Run);
             Run("costanti wireguard", WgConstantsTests.Run);
+            Run("handshake wireguard", WgHandshakeTests.Run);
 
             Console.WriteLine(T.Failures == 0 ? "ALL PASS" : "FAILURES: " + T.Failures);
             return T.Failures;

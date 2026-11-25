@@ -30,10 +30,48 @@ namespace Tailscale.Core.Protocol
         /// <summary>h = ck = BLAKE2s(protocolName).</summary>
         public void Initialize()
         {
+            Initialize(Tailscale.Core.Ascii.GetBytes(ProtocolConstants.NoiseInstanceName));
+        }
+
+        /// <summary>
+        /// Come <see cref="Initialize()"/> con il nome scelto dal chiamante:
+        /// WireGuard usa la sua costruzione, il controllo la sua.
+        /// </summary>
+        public void Initialize(byte[] protocolName)
+        {
             CheckFinished();
-            byte[] h = Blake2s.Hash(Tailscale.Core.Ascii.GetBytes(ProtocolConstants.NoiseInstanceName), 32);
+            byte[] h = Blake2s.Hash(protocolName, 32);
             Array.Copy(h, _handshakeHash, 32);
             Array.Copy(h, _chainingKey, 32);
+        }
+
+        /// <summary>
+        /// MixKey(X): aggiorna ck con il primo blocco HKDF e butta via il
+        /// secondo, come il mixKey di wireguard-go (KDF1).
+        /// </summary>
+        public void MixKey(byte[] input)
+        {
+            CheckFinished();
+            if (input == null) throw new ArgumentNullException("input");
+            byte[] derived = HkdfBlake2s.Derive(input, _chainingKey, null, 32);
+            Array.Copy(derived, 0, _chainingKey, 0, 32);
+        }
+
+        /// <summary>
+        /// MixPsk: KDF3 sul pre-shared key, come il psk di WireGuard. Aggiorna
+        /// ck, restituisce tau (da mischiare in h) e la chiave di cifratura.
+        /// </summary>
+        public byte[] MixPsk(byte[] psk, out byte[] tau)
+        {
+            CheckFinished();
+            if (psk == null) throw new ArgumentNullException("psk");
+            byte[] derived = HkdfBlake2s.Derive(psk, _chainingKey, null, 96);
+            Array.Copy(derived, 0, _chainingKey, 0, 32);
+            tau = new byte[32];
+            Array.Copy(derived, 32, tau, 0, 32);
+            byte[] key = new byte[32];
+            Array.Copy(derived, 64, key, 0, 32);
+            return key;
         }
 
         /// <summary>h = BLAKE2s(h || data).</summary>
