@@ -266,7 +266,7 @@ namespace Tailscale
             {
                 case VpnLinkState.On: return "Vpn_Status_On";
                 case VpnLinkState.Off: return "Vpn_Status_Off";
-                case VpnLinkState.Locked: return "Vpn_Status_Locked";
+                case VpnLinkState.Unavailable: return "Vpn_Status_Unavailable";
                 case VpnLinkState.Unknown: return "Vpn_Status_Unknown";
                 case VpnLinkState.Failed: return "Vpn_Status_Failed";
                 default: return "Vpn_Status_NotConfigured";

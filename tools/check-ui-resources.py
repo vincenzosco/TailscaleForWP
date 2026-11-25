@@ -40,7 +40,7 @@ REQUIRED_KEYS = ("Status_Connecting", "Status_NeedLogin", "Status_Authorized",
                  "PeersHeader/Text", "PeerCountFormat",
                  "VpnConnectButton/Content", "VpnDisconnectButton/Content",
                  "Vpn_Status_On", "Vpn_Status_Off", "Vpn_Status_NotConfigured",
-                 "Vpn_Status_Locked", "Vpn_Status_Unknown", "Vpn_Status_Failed")
+                 "Vpn_Status_Unavailable", "Vpn_Status_Unknown", "Vpn_Status_Failed")
 
 
 def read(path):

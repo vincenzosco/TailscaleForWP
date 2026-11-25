@@ -15,8 +15,8 @@ namespace Tailscale.Core
         /// <summary>Attivato: i valori [on] sono al loro posto, verificati rileggendoli.</summary>
         On,
 
-        /// <summary>Il telefono non ha l'interop unlock: nessuna scrittura tentata.</summary>
-        Locked,
+        /// <summary>Il canale nativo non e' disponibile: nessuna scrittura tentata.</summary>
+        Unavailable,
 
         /// <summary>L'accesso al registro non si e' verificato: nessuna scrittura tentata.</summary>
         Unknown,
@@ -171,17 +171,20 @@ namespace Tailscale.Core
 
         private bool Writable()
         {
-            InteropCapability capability = InteropProbe.Detect(_api);
-            if (capability == InteropCapability.Locked)
+            string failure;
+            InteropCapability capability = InteropProbe.Detect(_api, out failure);
+            if (capability == InteropCapability.Unavailable)
             {
-                _state = VpnLinkState.Locked;
-                _log.Log("vpn: interop bloccato, nessuna scrittura");
+                _state = VpnLinkState.Unavailable;
+                _log.Log("vpn: canale nativo non disponibile, nessuna scrittura"
+                         + (failure == null ? "" : " (" + failure + ")"));
                 return false;
             }
             if (capability != InteropCapability.Unlocked)
             {
                 _state = VpnLinkState.Unknown;
-                _log.Log("vpn: accesso al registro non verificato, nessuna scrittura");
+                _log.Log("vpn: accesso al registro non verificato, nessuna scrittura"
+                         + (failure == null ? "" : " (" + failure + ")"));
                 return false;
             }
             return true;

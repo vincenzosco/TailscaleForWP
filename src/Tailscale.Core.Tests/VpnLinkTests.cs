@@ -10,8 +10,8 @@ namespace Tailscale.Core.Tests
     ///
     /// - uno stato mostrato dalla **rilettura** e non da un flag: la pagina dice
     ///   cio' che il registro contiene davvero;
-    /// - nessuna scrittura quando il probe non passa: un telefono bloccato non
-    ///   deve ricevere mezzi valori;
+    /// - nessuna scrittura quando il probe non passa: un canale non verificato
+    ///   non deve ricevere mezzi valori;
     /// - il backup prima della scrittura e il ripristino esatto, assenze comprese;
     /// - la scrittura che non torna alla rilettura e' un fallimento dichiarato,
     ///   non un "fatto" sperato.
@@ -23,7 +23,9 @@ namespace Tailscale.Core.Tests
             Case("vpn: connect aggiunge la connessione e attiva, con conferma", ConnectAddsAndActivates);
             Case("vpn: connect due volte non sovrascrive il backup", ConnectTwiceKeepsTheFirstBackup);
             Case("vpn: una scrittura non confermata e' un fallimento", AnUnconfirmedWriteFails);
-            Case("vpn: telefono bloccato, nessuna scrittura", ALockedPhoneWritesNothing);
+            Case("vpn: accesso negato non dimostra interop bloccato", AccessDeniedProbeIsUnknown);
+            Case("vpn: canale nativo assente non scrive", NativeChannelUnavailableWritesNothing);
+            Case("vpn: errore inatteso del probe non scrive", UnexpectedProbeErrorWritesNothing);
             Case("vpn: probe incoerente, nessuna scrittura", AnIncoherentProbeWritesNothing);
             Case("vpn: disconnect disattiva e lo stato si rilegge", DisconnectDeactivates);
             Case("vpn: niente valori, niente stato attivo", WithoutValuesNothingIsOn);
@@ -103,16 +105,45 @@ namespace Tailscale.Core.Tests
             T.True(registry.Logged.Count > 0, "vpn: il fallimento lascia una riga di registro");
         }
 
-        private static void ALockedPhoneWritesNothing()
+        private static void AccessDeniedProbeIsUnknown()
         {
             FakeRegistry registry = new FakeRegistry();
             registry.FailWrites = true;
+            string failure;
+
+            InteropCapability capability = InteropProbe.Detect(registry, out failure);
+
+            T.Eq(InteropCapability.Unknown.ToString(), capability.ToString(),
+                 "vpn: accesso negato non identifica la causa come interop lock");
+            T.True(failure != null && failure.Contains("UnauthorizedAccessException"),
+                   "vpn: il probe espone il tipo di errore senza valore di registro");
+        }
+
+        private static void NativeChannelUnavailableWritesNothing()
+        {
+            FakeRegistry registry = new FakeRegistry();
+            registry.FailWrites = true;
+            registry.MissingNativeApi = true;
             VpnLink link = NewLink(registry, new MemoryStateStore());
 
             link.Connect();
 
-            T.Eq(VpnLinkState.Locked.ToString(), link.State.ToString(), "vpn: telefono bloccato, stato Locked");
-            T.Eq(0, registry.PlanWrites, "vpn: telefono bloccato, nessun valore del piano scritto");
+            T.Eq(VpnLinkState.Unavailable.ToString(), link.State.ToString(),
+                 "vpn: API nativa assente produce Unavailable");
+            T.Eq(0, registry.PlanWrites, "vpn: API assente, nessun valore del piano scritto");
+        }
+
+        private static void UnexpectedProbeErrorWritesNothing()
+        {
+            FakeRegistry registry = new FakeRegistry();
+            registry.FailUnexpectedly = true;
+            VpnLink link = NewLink(registry, new MemoryStateStore());
+
+            link.Connect();
+
+            T.Eq(VpnLinkState.Unknown.ToString(), link.State.ToString(),
+                 "vpn: errore inatteso resta Unknown");
+            T.Eq(0, registry.PlanWrites, "vpn: errore inatteso, nessun valore del piano scritto");
         }
 
         private static void AnIncoherentProbeWritesNothing()
@@ -299,6 +330,8 @@ namespace Tailscale.Core.Tests
         private readonly object _gate = new object();
 
         public bool FailWrites;
+        public bool MissingNativeApi;
+        public bool FailUnexpectedly;
         public bool LieOnRead;
         public bool LieOnProbe;
         public int PlanWrites;
@@ -339,6 +372,8 @@ namespace Tailscale.Core.Tests
         {
             lock (_gate)
             {
+                if (MissingNativeApi) throw new DllNotFoundException("ntdll non disponibile");
+                if (FailUnexpectedly) throw new InvalidOperationException("errore simulato");
                 if (FailWrites) throw new UnauthorizedAccessException("registro bloccato");
                 _values[Key(hive, path, name)] = value;
                 if (name != InteropProbe.ProbeName) PlanWrites++;

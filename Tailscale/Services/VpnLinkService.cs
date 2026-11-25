@@ -19,8 +19,8 @@ namespace Tailscale.Services
     /// 1. **telnet** (127.0.0.1): CMD Injector espone i comandi come servizio e i
     ///    `reg` girano con i diritti che servono. E' il canale "via telnet
     ///    cmdinjector".
-    /// 2. **registro diretto** via P/Invoke su ntdll, per un telefono sbloccato
-    ///    dove l'app ha i diritti.
+    /// 2. **registro diretto** via P/Invoke su ntdll, se l'API e' disponibile e
+    ///    i permessi del processo consentono la scrittura.
     ///
     /// Se nessuno dei due funziona non si scrive niente e la pagina lo dice: il
     /// provisioning manuale resta `provision.bat` eseguito da CMD Injector.
@@ -200,7 +200,9 @@ namespace Tailscale.Services
             try
             {
                 IRegistryApi telnet = new TelnetRegistryApi(new LocalTelnetShell(TelnetHost, TelnetPort));
-                if (InteropProbe.Detect(telnet) == InteropCapability.Unlocked)
+                string telnetFailure;
+                InteropCapability telnetCapability = InteropProbe.Detect(telnet, out telnetFailure);
+                if (telnetCapability == InteropCapability.Unlocked)
                 {
                     _log.Log("vpn: canale telnet (" + TelnetHost + ":" + TelnetPort + ") verificato");
                     lock (_gate)
@@ -210,7 +212,12 @@ namespace Tailscale.Services
                         return _link;
                     }
                 }
-                _log.Log("vpn: telnet presente ma registro non scrivibile da li'");
+                string telnetReason = telnetFailure ?? telnetCapability.ToString();
+                if (telnetCapability == InteropCapability.Unknown
+                    && telnetReason.IndexOf("accesso negato", StringComparison.OrdinalIgnoreCase) >= 0)
+                    _log.Log("vpn: telnet risponde ma CMD Injector non ha accesso al registro");
+                else
+                    _log.Log("vpn: telnet presente ma probe non verificato (" + telnetReason + ")");
             }
             catch (Exception ex)
             {
@@ -220,7 +227,8 @@ namespace Tailscale.Services
             try
             {
                 IRegistryApi direct = new NtRegistryApi();
-                InteropCapability capability = InteropProbe.Detect(direct);
+                string directFailure;
+                InteropCapability capability = InteropProbe.Detect(direct, out directFailure);
                 if (capability == InteropCapability.Unlocked)
                 {
                     _log.Log("vpn: canale registro diretto (ntdll) verificato");
@@ -232,12 +240,14 @@ namespace Tailscale.Services
                     }
                 }
 
-                _log.Log(capability == InteropCapability.Locked
-                    ? "vpn: nessun canale: il telefono non ha l'interop unlock, non si scrive niente"
-                    : "vpn: nessun canale: l'accesso al registro non si e' verificato, non si scrive niente");
+                _log.Log(capability == InteropCapability.Unavailable
+                    ? "vpn: canale diretto non disponibile (" + (directFailure ?? "API ntdll")
+                      + "), nessuna scrittura"
+                    : "vpn: accesso diretto non verificato (" + (directFailure ?? "causa sconosciuta")
+                      + "), nessuna scrittura");
                 _log.Log("vpn: il provisioning manuale resta provision.bat eseguito da CMD Injector");
-                lock (_gate) _state = capability == InteropCapability.Locked
-                    ? VpnLinkState.Locked
+                lock (_gate) _state = capability == InteropCapability.Unavailable
+                    ? VpnLinkState.Unavailable
                     : VpnLinkState.Unknown;
                 return null;
             }

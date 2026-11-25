@@ -205,10 +205,10 @@ namespace Tailscale.Native
     /// Injector, stesso esito.
     ///
     /// La lettura si fa leggendo il testo che `reg query` stampa, con
-    /// <see cref="RegQueryParser"/> (che e' nel core, e ha i suoi test). Una
-    /// scrittura che `reg` rifiuta diventa UnauthorizedAccessException: e' cio'
-    /// che il probe legge come "telefono bloccato", e un rifiuto non deve mai
-    /// passare per un successo silenzioso.
+    /// <see cref="RegQueryParser"/> (che e' nel core, e ha i suoi test). Solo
+    /// un rifiuto esplicito di accesso diventa UnauthorizedAccessException.
+    /// Gli altri errori di reg.exe restano errori diagnostici: un comando
+    /// malformato non prova che il telefono sia interop-locked.
     /// </summary>
     public sealed class TelnetRegistryApi : IRegistryApi
     {
@@ -235,6 +235,8 @@ namespace Tailscale.Native
                 value = null;
                 return false;
             }
+            if (RegQueryParser.ClassifyError(output) != RegistryCommandError.NotFound)
+                ThrowCommandError("reg query", output, hive, path, name);
 
             // Le frasi di reg.exe cambiano con la lingua del sistema, quindi
             // senza fidarsi delle parole l'assenza si prova con le righe.
@@ -244,6 +246,8 @@ namespace Tailscale.Native
                 // e' guasta. Si riprova con l'elenco della chiave, dove un
                 // valore esistente compare sempre.
                 string listing = _shell.Execute("reg query \"" + key + "\"");
+                if (RegQueryParser.ClassifyError(listing) != RegistryCommandError.NotFound)
+                    ThrowCommandError("reg query", listing, hive, path, name);
                 if (RegQueryParser.HasValueLine(listing, name))
                 {
                     // C'e': il primo comando ha risposto male, non e' assente.
@@ -289,9 +293,7 @@ namespace Tailscale.Native
             string data = value.Kind == RegValue.Dword ? value.Text : "\"" + value.Text + "\"";
             string output = _shell.Execute("reg add \"" + Key(hive, path) + "\" /v \"" + name
                                            + "\" /t " + type + " /d " + data + " /f");
-            if (IsError(output))
-                throw new UnauthorizedAccessException("reg add ha rifiutato " + hive + "\\" + path + "\\" + name
-                                                      + ": " + FirstLine(output));
+            ThrowCommandError("reg add", output, hive, path, name);
         }
 
         public void Delete(string hive, string path, string name)
@@ -302,9 +304,9 @@ namespace Tailscale.Native
             string output = _shell.Execute("reg delete \"" + Key(hive, path) + "\" /v \"" + name + "\" /f");
             // Il valore che non c'e' e' gia' nello stato desiderato: non e' un
             // errore. Un rifiuto vero (accesso negato) lo e'.
-            if (IsNotFound(output) || !IsError(output)) return;
-            throw new UnauthorizedAccessException("reg delete ha rifiutato " + hive + "\\" + path + "\\" + name
-                                                  + ": " + FirstLine(output));
+            if (IsNotFound(output)
+                || RegQueryParser.ClassifyError(output) == RegistryCommandError.NotFound) return;
+            ThrowCommandError("reg delete", output, hive, path, name);
         }
 
         private static string Key(string hive, string path)
@@ -342,9 +344,16 @@ namespace Tailscale.Native
         /// <summary>La punteggiatura che nel guscio non comanda niente.</summary>
         private const string SafeShellChars = ".,:;=+-_/\\()[]{}@#!?'*~";
 
-        private static bool IsError(string output)
+        private static void ThrowCommandError(string command, string output,
+                                              string hive, string path, string name)
         {
-            return output != null && output.IndexOf("ERROR", StringComparison.OrdinalIgnoreCase) >= 0;
+            RegistryCommandError error = RegQueryParser.ClassifyError(output);
+            if (error == RegistryCommandError.None) return;
+
+            string where = hive + "\\" + path + "\\" + name;
+            if (error == RegistryCommandError.AccessDenied)
+                throw new UnauthorizedAccessException(command + ": accesso negato per " + where);
+            throw new InvalidOperationException(command + ": " + error.ToString() + " per " + where);
         }
 
         private static bool IsNotFound(string output)
@@ -355,11 +364,5 @@ namespace Tailscale.Native
                 || output.IndexOf("cannot find", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
-        private static string FirstLine(string output)
-        {
-            if (output == null) return "";
-            string[] lines = output.Replace("\r\n", "\n").Split('\n');
-            return lines.Length > 0 ? lines[0].Trim() : "";
-        }
     }
 }

@@ -15,8 +15,55 @@ namespace Tailscale.Core
     /// Il nome del valore, il tipo, il resto della riga. I nomi delle chiavi non
     /// contano: si cerca la riga del valore, non l'intestazione.
     /// </summary>
+    public enum RegistryCommandError
+    {
+        None,
+        AccessDenied,
+        NotFound,
+        InvalidParameter,
+        Other
+    }
+
     public static class RegQueryParser
     {
+        /// <summary>
+        /// Classifica solo le categorie riconoscibili nelle risposte localizzate
+        /// di reg.exe. Non restituisce mai il testo della risposta, che potrebbe
+        /// contenere dati di registro.
+        /// </summary>
+        public static RegistryCommandError ClassifyError(string output)
+        {
+            if (!HasErrorLine(output)) return RegistryCommandError.None;
+            if (output.IndexOf("access is denied", StringComparison.OrdinalIgnoreCase) >= 0
+                || output.IndexOf("access denied", StringComparison.OrdinalIgnoreCase) >= 0
+                || output.IndexOf("accesso negato", StringComparison.OrdinalIgnoreCase) >= 0)
+                return RegistryCommandError.AccessDenied;
+            if (output.IndexOf("Impossibile trovare", StringComparison.OrdinalIgnoreCase) >= 0
+                || output.IndexOf("unable to find", StringComparison.OrdinalIgnoreCase) >= 0
+                || output.IndexOf("cannot find", StringComparison.OrdinalIgnoreCase) >= 0)
+                return RegistryCommandError.NotFound;
+            if (output.IndexOf("invalid", StringComparison.OrdinalIgnoreCase) >= 0
+                || output.IndexOf("non valido", StringComparison.OrdinalIgnoreCase) >= 0
+                || output.IndexOf("syntax", StringComparison.OrdinalIgnoreCase) >= 0
+                || output.IndexOf("sintassi", StringComparison.OrdinalIgnoreCase) >= 0)
+                return RegistryCommandError.InvalidParameter;
+            return RegistryCommandError.Other;
+        }
+
+        private static bool HasErrorLine(string output)
+        {
+            if (output == null) return false;
+            string[] lines = output.Replace("\r\n", "\n").Split('\n');
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string line = lines[i].TrimStart();
+                if (line.StartsWith("ERROR", StringComparison.OrdinalIgnoreCase)
+                    || line.StartsWith("ERRORE", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
+        }
+
         public static bool TryParseValue(string output, string name, out RegValue value)
         {
             value = null;

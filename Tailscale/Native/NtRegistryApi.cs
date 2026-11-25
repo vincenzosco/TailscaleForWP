@@ -10,11 +10,9 @@ namespace Tailscale.Native
     /// NtQueryValueKey, NtSetValueKey, NtDeleteValueKey, NtClose.
     ///
     /// Perche' ntdll e non `Microsoft.Win32.Registry`: WP8.1 non ce l'ha, ed e'
-    /// lo stesso motivo per cui il core inietta invece di chiamare. Funziona solo
-    /// su un telefono con interop unlock: senza, la prima chiamata fallisce
-    /// (DllNotFoundException, oppure ACCESS_DENIED), il probe risponde Locked e
-    /// l'app non scrive niente. E' la regola del piano 3: nessuna scrittura a
-    /// mezzi.
+    /// lo stesso motivo per cui il core inietta invece di chiamare. Il probe
+    /// distingue l'API nativa assente da un accesso negato (che puo' dipendere
+    /// dalla sandbox dell'app); in entrambi i casi il piano non scrive niente.
     ///
     /// I layout di UNICODE_STRING, OBJECT_ATTRIBUTES e
     /// KEY_VALUE_PARTIAL_INFORMATION sono quelli di winternl.h, commentati per
@@ -69,9 +67,6 @@ namespace Tailscale.Native
             public IntPtr SecurityQualityOfService;
         }
 
-        [DllImport("ntdll.dll", CharSet = CharSet.Unicode)]
-        private static extern void RtlInitUnicodeString(out UnicodeString destination, string source);
-
         [DllImport("ntdll.dll")]
         private static extern int NtOpenKey(out IntPtr handle, int access, ref ObjectAttributes attributes);
 
@@ -103,49 +98,54 @@ namespace Tailscale.Native
 
             try
             {
-                UnicodeString valueName;
-                RtlInitUnicodeString(out valueName, name);
+                UnicodeString valueName = AllocateUnicodeString(name);
+                try
+                {
+                    int needed;
+                    status = NtQueryValueKey(handle, ref valueName, KeyValuePartialInformation, null, 0, out needed);
+                    if (status == StatusObjectNameNotFound) return false;
+                    if (status != StatusBufferTooSmall && status != StatusBufferOverflow)
+                        Check(status, "NtQueryValueKey", hive, path, name);
 
-                int needed;
-                status = NtQueryValueKey(handle, ref valueName, KeyValuePartialInformation, null, 0, out needed);
-                if (status == StatusObjectNameNotFound) return false;
-                if (status != StatusBufferTooSmall && status != StatusBufferOverflow)
+                    byte[] information = new byte[needed];
+                    status = NtQueryValueKey(handle, ref valueName, KeyValuePartialInformation,
+                                             information, information.Length, out needed);
+                    if (status == StatusObjectNameNotFound) return false;
                     Check(status, "NtQueryValueKey", hive, path, name);
 
-                byte[] information = new byte[needed];
-                status = NtQueryValueKey(handle, ref valueName, KeyValuePartialInformation,
-                                         information, information.Length, out needed);
-                if (status == StatusObjectNameNotFound) return false;
-                Check(status, "NtQueryValueKey", hive, path, name);
+                    // KEY_VALUE_PARTIAL_INFORMATION di winternl.h: TitleIndex (4
+                    // byte), Type (4), DataLength (4), poi i dati. I dati iniziano a
+                    // offset 12 e vanno per DataLength byte: la struttura non ha
+                    // nessun campo DataOffset, e leggere a offset 12 come se ci fosse
+                    // prenderebbe i primi byte del dato per una posizione.
+                    int type = BitConverter.ToInt32(information, 4);
+                    int dataLength = BitConverter.ToInt32(information, 8);
 
-                // KEY_VALUE_PARTIAL_INFORMATION di winternl.h: TitleIndex (4
-                // byte), Type (4), DataLength (4), poi i dati. I dati iniziano a
-                // offset 12 e vanno per DataLength byte: la struttura non ha
-                // nessun campo DataOffset, e leggere a offset 12 come se ci fosse
-                // prenderebbe i primi byte del dato per una posizione.
-                int type = BitConverter.ToInt32(information, 4);
-                int dataLength = BitConverter.ToInt32(information, 8);
+                    if (type == RegSz)
+                    {
+                        // Il testo e' Unicode; il terminatore, quando c'e', non fa
+                        // parte del valore.
+                        string text = Encoding.Unicode.GetString(information, 12, dataLength);
+                        int end = text.Length;
+                        while (end > 0 && text[end - 1] == '\0') end--;
+                        if (end != text.Length) text = text.Substring(0, end);
+                        value = new RegValue(RegValue.Sz, text);
+                        return true;
+                    }
+                    if (type == RegDword)
+                    {
+                        uint number = BitConverter.ToUInt32(information, 12);
+                        value = new RegValue(RegValue.Dword, number.ToString());
+                        return true;
+                    }
 
-                if (type == RegSz)
-                {
-                    // Il testo e' Unicode; il terminatore, quando c'e', non fa
-                    // parte del valore.
-                    string text = Encoding.Unicode.GetString(information, 12, dataLength);
-                    int end = text.Length;
-                    while (end > 0 && text[end - 1] == '\0') end--;
-                    if (end != text.Length) text = text.Substring(0, end);
-                    value = new RegValue(RegValue.Sz, text);
-                    return true;
+                    // Un tipo che il piano non sa descrivere: non si inventa.
+                    return false;
                 }
-                if (type == RegDword)
+                finally
                 {
-                    uint number = BitConverter.ToUInt32(information, 12);
-                    value = new RegValue(RegValue.Dword, number.ToString());
-                    return true;
+                    Marshal.FreeHGlobal(valueName.Buffer);
                 }
-
-                // Un tipo che il piano non sa descrivere: non si inventa.
-                return false;
             }
             finally
             {
@@ -177,10 +177,16 @@ namespace Tailscale.Native
                     data = Encoding.Unicode.GetBytes(value.Text + "\0");
                 }
 
-                UnicodeString valueName;
-                RtlInitUnicodeString(out valueName, name);
-                status = NtSetValueKey(handle, ref valueName, 0, type, data, data.Length);
-                Check(status, "NtSetValueKey", hive, path, name);
+                UnicodeString valueName = AllocateUnicodeString(name);
+                try
+                {
+                    status = NtSetValueKey(handle, ref valueName, 0, type, data, data.Length);
+                    Check(status, "NtSetValueKey", hive, path, name);
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(valueName.Buffer);
+                }
             }
             finally
             {
@@ -197,11 +203,17 @@ namespace Tailscale.Native
 
             try
             {
-                UnicodeString valueName;
-                RtlInitUnicodeString(out valueName, name);
-                status = NtDeleteValueKey(handle, ref valueName);
-                if (status == StatusObjectNameNotFound) return;  // gia' assente: e' quello che serve
-                Check(status, "NtDeleteValueKey", hive, path, name);
+                UnicodeString valueName = AllocateUnicodeString(name);
+                try
+                {
+                    status = NtDeleteValueKey(handle, ref valueName);
+                    if (status == StatusObjectNameNotFound) return;  // gia' assente: e' quello che serve
+                    Check(status, "NtDeleteValueKey", hive, path, name);
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(valueName.Buffer);
+                }
             }
             finally
             {
@@ -248,10 +260,18 @@ namespace Tailscale.Native
 
         private static int OpenKey(string fullPath, int access, out IntPtr handle)
         {
-            UnicodeString name;
-            RtlInitUnicodeString(out name, fullPath);
+            UnicodeString name = AllocateUnicodeString(fullPath);
             ObjectAttributes attributes;
-            IntPtr namePointer = NewAttributes(ref name, out attributes);
+            IntPtr namePointer;
+            try
+            {
+                namePointer = NewAttributes(ref name, out attributes);
+            }
+            catch
+            {
+                Marshal.FreeHGlobal(name.Buffer);
+                throw;
+            }
             try
             {
                 return NtOpenKey(out handle, access, ref attributes);
@@ -259,15 +279,24 @@ namespace Tailscale.Native
             finally
             {
                 Marshal.FreeHGlobal(namePointer);
+                Marshal.FreeHGlobal(name.Buffer);
             }
         }
 
         private static int Create(string fullPath, int access, out IntPtr handle, out int disposition)
         {
-            UnicodeString name;
-            RtlInitUnicodeString(out name, fullPath);
+            UnicodeString name = AllocateUnicodeString(fullPath);
             ObjectAttributes attributes;
-            IntPtr namePointer = NewAttributes(ref name, out attributes);
+            IntPtr namePointer;
+            try
+            {
+                namePointer = NewAttributes(ref name, out attributes);
+            }
+            catch
+            {
+                Marshal.FreeHGlobal(name.Buffer);
+                throw;
+            }
             try
             {
                 return NtCreateKey(out handle, access, ref attributes, 0, IntPtr.Zero,
@@ -276,7 +305,27 @@ namespace Tailscale.Native
             finally
             {
                 Marshal.FreeHGlobal(namePointer);
+                Marshal.FreeHGlobal(name.Buffer);
             }
+        }
+
+        /// <summary>
+        /// Alloca esplicitamente il testo UTF-16 referenziato da UNICODE_STRING.
+        /// RtlInitUnicodeString su un parametro string gestito lascerebbe Buffer
+        /// puntare a memoria temporanea liberata dal marshaller al ritorno.
+        /// </summary>
+        private static UnicodeString AllocateUnicodeString(string text)
+        {
+            int byteLength = Encoding.Unicode.GetByteCount(text);
+            if (byteLength > ushort.MaxValue - 2)
+                throw new ArgumentException("nome Unicode troppo lungo", "text");
+
+            IntPtr buffer = Marshal.StringToHGlobalUni(text);
+            UnicodeString value = new UnicodeString();
+            value.Length = (ushort)byteLength;
+            value.MaximumLength = (ushort)(byteLength + 2);
+            value.Buffer = buffer;
+            return value;
         }
 
         /// <summary>
@@ -287,23 +336,30 @@ namespace Tailscale.Native
         private static IntPtr NewAttributes(ref UnicodeString name, out ObjectAttributes attributes)
         {
             IntPtr namePointer = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(UnicodeString)));
-            Marshal.StructureToPtr(name, namePointer, false);
-
-            attributes = new ObjectAttributes();
-            attributes.Length = Marshal.SizeOf(typeof(ObjectAttributes));
-            attributes.RootDirectory = IntPtr.Zero;
-            attributes.ObjectName = namePointer;
-            attributes.Attributes = ObjCaseInsensitive;
-            attributes.SecurityDescriptor = IntPtr.Zero;
-            attributes.SecurityQualityOfService = IntPtr.Zero;
-            return namePointer;
+            try
+            {
+                Marshal.StructureToPtr(name, namePointer, false);
+                attributes = new ObjectAttributes();
+                attributes.Length = Marshal.SizeOf(typeof(ObjectAttributes));
+                attributes.RootDirectory = IntPtr.Zero;
+                attributes.ObjectName = namePointer;
+                attributes.Attributes = ObjCaseInsensitive;
+                attributes.SecurityDescriptor = IntPtr.Zero;
+                attributes.SecurityQualityOfService = IntPtr.Zero;
+                return namePointer;
+            }
+            catch
+            {
+                Marshal.FreeHGlobal(namePointer);
+                throw;
+            }
         }
 
         /// <summary>
         /// Uno stato che non e' successo diventa un'eccezione con il codice
         /// esadecimale e il percorso: un fallimento deve essere diagnosticabile,
         /// non un "non funziona". ACCESS_DENIED diventa UnauthorizedAccessException,
-        /// che e' cio' che il probe legge come "telefono bloccato".
+        /// che il probe puo' distinguere da un errore di comando.
         /// </summary>
         private static void Check(int status, string call, string hive, string path, string name)
         {

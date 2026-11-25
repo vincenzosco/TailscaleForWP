@@ -85,8 +85,8 @@
   <data name="Vpn_Status_NotConfigured" xml:space="preserve">
     <value>VPN link: not configured yet</value>
   </data>
-  <data name="Vpn_Status_Locked" xml:space="preserve">
-    <value>VPN: needs CMD Injector (telnet). Without it the app has no registry channel: direct access is denied even with interop</value>
+  <data name="Vpn_Status_Unavailable" xml:space="preserve">
+    <value>VPN: direct registry channel unavailable. See the log for the reason</value>
   </data>
   <data name="Vpn_Status_Unknown" xml:space="preserve">
     <value>VPN link: registry access not verified, nothing is written</value>

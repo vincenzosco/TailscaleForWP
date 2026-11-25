@@ -3,17 +3,15 @@ using System;
 namespace Tailscale.Core
 {
     /// <summary>
-    /// Quanto il telefono lascia fare al registro. Tre risposte, non due: un
-    /// dispositivo sbloccato, uno bloccato, e il caso in cui il ciclo di
-    /// scrittura non si e' completato in modo coerente. Da un solo indizio non si
-    /// deduce "Unlocked": e' la regola del piano 3, e ha un motivo pratico --
-    /// scrivere credendo di poterlo fare lascia mezzi valori nel registro del
-    /// sistema, che e' peggio di non scrivere.
+    /// Quanto il canale scelto lascia fare al registro: verificato, API nativa
+    /// assente, oppure non verificato. Un accesso negato non distingue un sistema
+    /// interop-locked dalla sandbox dell'app, quindi non viene presentato come
+    /// prova che il telefono sia bloccato.
     /// </summary>
     public enum InteropCapability
     {
         Unlocked,
-        Locked,
+        Unavailable,
         Unknown
     }
 
@@ -34,7 +32,20 @@ namespace Tailscale.Core
 
         public static InteropCapability Detect(IRegistryApi api)
         {
+            string ignored;
+            return Detect(api, out ignored);
+        }
+
+        /// <summary>
+        /// Come <see cref="Detect(IRegistryApi)"/>, ma restituisce una causa
+        /// diagnostica priva di valori del registro. L'accesso negato dal
+        /// comando telnet o del sandbox non prova che il telefono sia
+        /// interop-locked: un accesso negato riporta Unknown, non Locked.
+        /// </summary>
+        public static InteropCapability Detect(IRegistryApi api, out string failure)
+        {
             if (api == null) throw new ArgumentNullException("api");
+            failure = null;
 
             try
             {
@@ -49,20 +60,39 @@ namespace Tailscale.Core
                 bool found = api.TryRead(ProbeHive, ProbePath, ProbeName, out readBack);
                 api.Delete(ProbeHive, ProbePath, ProbeName);
 
-                if (!found || !probe.Equals(readBack)) return InteropCapability.Unknown;
+                if (!found || !probe.Equals(readBack))
+                {
+                    failure = "il valore di prova non e' stato confermato";
+                    return InteropCapability.Unknown;
+                }
                 return InteropCapability.Unlocked;
             }
-            catch (UnauthorizedAccessException) { return InteropCapability.Locked; }
-            catch (DllNotFoundException) { return InteropCapability.Locked; }
+            catch (UnauthorizedAccessException ex)
+            {
+                failure = Describe(ex);
+                return InteropCapability.Unknown;
+            }
+            catch (DllNotFoundException ex)
+            {
+                failure = Describe(ex);
+                return InteropCapability.Unavailable;
+            }
             catch (Exception ex)
             {
                 // EntryPointNotFoundException non esiste nel profilo WP8.1, quindi
                 // non si puo' nominare in un catch: si riconosce dal nome del tipo.
-                // Vale come Locked: manca l'entry point di ntdll, non c'e' niente
-                // da scrivere.
-                if (ex.GetType().Name == "EntryPointNotFoundException") return InteropCapability.Locked;
+                // Un accesso negato resta Unknown, perche' puo' essere sandbox; solo
+                // l'assenza esplicita della DLL o dell'entry point e' Unavailable.
+                failure = Describe(ex);
+                if (ex.GetType().Name == "EntryPointNotFoundException") return InteropCapability.Unavailable;
                 return InteropCapability.Unknown;
             }
+        }
+
+        private static string Describe(Exception ex)
+        {
+            string detail = ex is InvalidOperationException ? ex.Message : ex.GetType().Name;
+            return detail + " (HRESULT 0x" + unchecked((uint)ex.HResult).ToString("X8") + ")";
         }
     }
 }

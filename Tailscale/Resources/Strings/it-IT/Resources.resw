@@ -85,8 +85,8 @@
   <data name="Vpn_Status_NotConfigured" xml:space="preserve">
     <value>VPN: non ancora configurata</value>
   </data>
-  <data name="Vpn_Status_Locked" xml:space="preserve">
-    <value>VPN: serve CMD Injector (telnet). Senza, l'app non ha canali al registro: il diretto e' negato anche con l'interop</value>
+  <data name="Vpn_Status_Unavailable" xml:space="preserve">
+    <value>VPN: canale diretto al registro non disponibile. Vedi il motivo nel registro dell'app</value>
   </data>
   <data name="Vpn_Status_Unknown" xml:space="preserve">
     <value>VPN: accesso al registro non verificato, non si scrive niente</value>

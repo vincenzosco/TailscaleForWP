@@ -26,6 +26,7 @@ namespace Tailscale.Core.Tests
             Case("reg query: nomi con spazi, dati vuoti e nomi prefisso", RegQuerySpacedNamesAndEmptyData);
             Case("reg query: la presenza si legge dalle righe, non dalle frasi", PresenceIsProvenByLines);
             Case("reg query: la riga della chiave si distingue dal resto", KeyLineIsNotJustAnyLine);
+            Case("reg query: gli errori sono classificati senza confonderli con accesso negato", ErrorOutputIsClassifiedSafely);
         }
 
         private static void Case(string name, Action test)
@@ -39,6 +40,22 @@ namespace Tailscale.Core.Tests
                 T.Failures++;
                 Console.WriteLine("FAIL " + name + ": " + ex.GetType().Name + ": " + ex.Message);
             }
+        }
+
+        private static void ErrorOutputIsClassifiedSafely()
+        {
+            T.Eq(RegistryCommandError.AccessDenied.ToString(),
+                 RegQueryParser.ClassifyError("ERROR: Access is denied.").ToString(),
+                 "reg query: accesso negato viene riconosciuto esplicitamente");
+            T.Eq(RegistryCommandError.InvalidParameter.ToString(),
+                 RegQueryParser.ClassifyError("ERROR: Invalid syntax.").ToString(),
+                 "reg query: errore di sintassi non equivale ad accesso negato");
+            T.Eq(RegistryCommandError.Other.ToString(),
+                 RegQueryParser.ClassifyError("ERROR: operation failed").ToString(),
+                 "reg query: errore non classificato resta distinto");
+            T.Eq(RegistryCommandError.None.ToString(),
+                 RegQueryParser.ClassifyError("HKEY_LOCAL_MACHINE\\SOFTWARE\\ERRORS").ToString(),
+                 "reg query: la parola ERROR in un percorso non e' un errore");
         }
 
         private static void TheDefaultHasThreeSections()

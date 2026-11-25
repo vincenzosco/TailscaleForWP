@@ -175,15 +175,15 @@ identity survives.
 </details>
 
 <details>
-<summary><strong>The VPN button says the phone has no interop, but it has</strong></summary>
+<summary><strong>The VPN button reports an interop or registry error</strong></summary>
 <br>
 
-That message is about the registry channels, not about your phone. The app's
-sandbox cannot write `HKLM` even with interop unlock, so the automatic path needs
-CMD Injector and its telnet service on `127.0.0.1:23`. Install or start CMD
-Injector and try again. In `registro.log` the line `vpn: canale telnet ...
-verificato` means the channel is there; `vpn: telnet non disponibile` means CMD
-Injector is missing or not listening.
+The app can distinguish an unavailable direct ntdll channel from a denied
+registry command and from other telnet errors. In `registro.log`, look for
+`vpn: telnet presente ma probe non verificato` or `vpn: accesso diretto non
+verificato`; the reason is recorded without registry values. A reachable CMD
+Injector telnet service does not by itself prove that `reg.exe` can write the
+required key.
 
 </details>
 
@@ -380,15 +380,14 @@ l'identità sopravvive.
 </details>
 
 <details>
-<summary><strong>Il pulsante VPN dice che il telefono non ha l'interop, ma ce l'ha</strong></summary>
+<summary><strong>Il pulsante VPN segnala un errore di interop o del registro</strong></summary>
 <br>
 
-Quel messaggio parla dei canali verso il registro, non del telefono. La sandbox
-dell'app non può scrivere `HKLM` nemmeno con l'interop unlock, quindi il percorso
-automatico ha bisogno di CMD Injector e del suo servizio telnet su `127.0.0.1:23`.
-Installa o avvia CMD Injector e riprova. In `registro.log`, la riga `vpn: canale
-telnet ... verificato` significa che il canale c'è; `vpn: telnet non disponibile`
-significa che CMD Injector manca o non ascolta.
+L'app distingue un canale ntdll diretto non disponibile, un comando di registro
+negato e gli altri errori telnet. In `registro.log`, cerca `vpn: telnet presente
+ma probe non verificato` o `vpn: accesso diretto non verificato`; la causa è
+registrata senza valori del registro. Il fatto che CMD Injector risponda via
+telnet non dimostra da solo che `reg.exe` possa scrivere la chiave richiesta.
 
 </details>
 
