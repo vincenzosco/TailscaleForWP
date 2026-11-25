@@ -46,6 +46,8 @@ namespace Tailscale.Core.Tests
             Run("livello ip", IpV4Tests.Run);
             Run("segmenti tcp", TcpSegmentTests.Run);
             Run("stati tcp", TcpStateTests.Run);
+            Run("tunnel", TunnelTests.Run);
+            Run("tunnel keepalive", TunnelKeepaliveTests.Run);
 
             Console.WriteLine(T.Failures == 0 ? "ALL PASS" : "FAILURES: " + T.Failures);
             return T.Failures;
