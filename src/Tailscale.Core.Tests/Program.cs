@@ -45,6 +45,7 @@ namespace Tailscale.Core.Tests
             Run("replay wireguard", WgReplayTests.Run);
             Run("livello ip", IpV4Tests.Run);
             Run("segmenti tcp", TcpSegmentTests.Run);
+            Run("stati tcp", TcpStateTests.Run);
 
             Console.WriteLine(T.Failures == 0 ? "ALL PASS" : "FAILURES: " + T.Failures);
             return T.Failures;

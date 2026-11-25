@@ -37,6 +37,23 @@ namespace Tailscale.Core.Net.Ip
             return new byte[] { a, b, c, d };
         }
 
+        /// <summary>L'indirizzo come intero in ordine di rete.</summary>
+        public static uint ToUInt32(byte[] address)
+        {
+            if (address == null || address.Length != 4)
+                throw new ArgumentException("un indirizzo IPv4 ha 4 byte", "address");
+            return (uint)((address[0] << 24) | (address[1] << 16) | (address[2] << 8) | address[3]);
+        }
+
+        /// <summary>L'intero di rete come indirizzo a quattro ottetti.</summary>
+        public static byte[] ToBytes(uint address)
+        {
+            return new byte[]
+            {
+                (byte)(address >> 24), (byte)(address >> 16), (byte)(address >> 8), (byte)address
+            };
+        }
+
         /// <summary>
         /// Costruisce il pacchetto. Eccezione esplicita se il pacchetto
         /// supera l'MTU del tunnel.
