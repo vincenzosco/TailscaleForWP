@@ -16,6 +16,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REFS = os.path.join(ROOT, "refs", "tailscale")
 CONSTANTS_CS = os.path.join(ROOT, "src", "Tailscale.Core", "Protocol", "ProtocolConstants.cs")
 NOTES = os.path.join(ROOT, "docs", "protocol-notes.md")
+WG_REFS = os.path.join(ROOT, "refs", "wireguard-go")
+WG_CONSTANTS_CS = os.path.join(ROOT, "src", "Tailscale.Core", "Wg", "WgConstants.cs")
+WG_NOTES = os.path.join(ROOT, "docs", "wireguard-notes.md")
 
 # (file nel tree vendored, regex, nome della costante C#, valore atteso o None)
 CHECKS = [
@@ -43,6 +46,47 @@ CHECKS = [
 # confronto va fatto secondo la regola giusta, non tutte con l'uguaglianza.
 GO_ONLY = {"ServerKeyPathFormat"}      # Go: '/key?v=%d'  |  C#: '{0}/key?v={1}'
 CONTAINS_CS = {"RegisterPath", "MapPath"}
+
+# Stesse regole per refs/wireguard-go contro WgConstants.cs. Le righe "num"
+# si confrontano valutando l'espressione intera (i due linguaggi scrivono gli
+# stessi numeri in forme diverse): i valori sono quelli di
+# docs/wireguard-notes.md, trascritti dal sorgente pinnato.
+WG_CHECKS = [
+    ("str", "device/noise-protocol.go", r'NoiseConstruction\s*=\s*"([^"]+)"', "Construction", "Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s"),
+    ("str", "device/noise-protocol.go", r'WGIdentifier\s*=\s*"([^"]+)"', "Identifier", "WireGuard v1 zx2c4 Jason@zx2c4.com"),
+    ("str", "device/noise-protocol.go", r'WGLabelMAC1\s*=\s*"([^"]+)"', "LabelMac1", "mac1----"),
+    ("str", "device/noise-protocol.go", r'WGLabelCookie\s*=\s*"([^"]+)"', "LabelCookie", "cookie--"),
+    ("num", "device/noise-protocol.go", r'MessageInitiationType\s*=\s*(\d+)', "MessageInitiationType", "1"),
+    ("num", "device/noise-protocol.go", r'MessageResponseType\s*=\s*(\d+)', "MessageResponseType", "2"),
+    ("num", "device/noise-protocol.go", r'MessageCookieReplyType\s*=\s*(\d+)', "MessageCookieReplyType", "3"),
+    ("num", "device/noise-protocol.go", r'MessageTransportType\s*=\s*(\d+)', "MessageTransportType", "4"),
+    ("num", "device/noise-protocol.go", r'MessageInitiationSize\s*=\s*(\d+)', "MessageInitiationSize", "148"),
+    ("num", "device/noise-protocol.go", r'MessageResponseSize\s*=\s*(\d+)', "MessageResponseSize", "92"),
+    ("num", "device/noise-protocol.go", r'MessageCookieReplySize\s*=\s*(\d+)', "MessageCookieReplySize", "64"),
+    ("num", "device/noise-protocol.go", r'MessageTransportHeaderSize\s*=\s*(\d+)', "MessageTransportHeaderSize", "16"),
+    ("num", "device/noise-protocol.go", r'MessageTransportOffsetReceiver\s*=\s*(\d+)', "MessageTransportOffsetReceiver", "4"),
+    ("num", "device/noise-protocol.go", r'MessageTransportOffsetCounter\s*=\s*(\d+)', "MessageTransportOffsetCounter", "8"),
+    ("num", "device/noise-protocol.go", r'MessageTransportOffsetContent\s*=\s*(\d+)', "MessageTransportOffsetContent", "16"),
+    ("num", "tai64n/tai64n.go", r'base\s*=\s*uint64\((0x[0-9A-Fa-f]+)\)', "Tai64Base", "0x400000000000000a"),
+    ("num", "tai64n/tai64n.go", r'whitenerMask\s*=\s*uint32\((0x[0-9A-Fa-f -]+)\)', "NanosecondWhitenerMask", "0x1000000 - 1"),
+    ("num", "device/constants.go", r'RekeyAfterMessages\s*=\s*(\(1 \d+\)|1 << \d+|\(1 << \d+\))', "RekeyAfterMessages", "1 << 60"),
+    ("num", "device/constants.go", r'RejectAfterMessages\s*=\s*(\(1 << 64\) - \(1 << 13\) - 1)', "RejectAfterMessages", "(1 << 64) - (1 << 13) - 1"),
+    ("num", "device/constants.go", r'RekeyAfterTime\s*=\s*time\.Second\s*\*\s*(\d+)', "RekeyAfterSeconds", "120"),
+    ("num", "device/constants.go", r'RejectAfterTime\s*=\s*time\.Second\s*\*\s*(\d+)', "RejectAfterSeconds", "180"),
+    ("num", "device/constants.go", r'KeepaliveTimeout\s*=\s*time\.Second\s*\*\s*(\d+)', "KeepaliveSeconds", "10"),
+    ("num", "device/constants.go", r'RekeyTimeout\s*=\s*time\.Second\s*\*\s*(\d+)', "RekeyTimeoutSeconds", "5"),
+    ("num", "device/constants.go", r'RekeyAttemptTime\s*=\s*time\.Second\s*\*\s*(\d+)', "RekeyAttemptSeconds", "90"),
+]
+
+
+def eval_int(expr):
+    """Valuta un'espressione intera costante, con sole cifre, parentesi e
+    gli operatori <<, + e -. Le costanti di sistema ammesse sono poche e
+    dichiarate qui: niente eval sul codice vendored."""
+    cleaned = expr.replace("ulong.MaxValue", "18446744073709551615").replace("UL", "").strip()
+    if not re.match(r"^[0-9x() <<+\-A-Fa-f]+$", cleaned):
+        raise ValueError("espressione non ammessa: " + expr)
+    return int(eval(cleaned, {"__builtins__": {}}, {}))
 
 
 def read_cs_constants(path):
@@ -98,8 +142,59 @@ def main():
             continue
         checked += 1
 
-    # Coerenza del pin con le note: il tag pinnato deve comparire nelle note,
-    # altrimenti le righe citate nelle note descrivono un'altra revisione.
+    # WireGuard: stessa regola contro refs/wireguard-go e WgConstants.cs.
+    wg_cs = {}
+    if not os.path.isfile(WG_CONSTANTS_CS):
+        errors.append("WgConstants.cs non esiste: attendi il piano 2 (Task 1)")
+    else:
+        wg_cs = read_cs_constants(WG_CONSTANTS_CS)
+    if not os.path.isdir(WG_REFS):
+        errors.append("refs/wireguard-go non c'e': esegui  python tools/fetch-refs.py")
+    else:
+        for kind, rel, pattern, name, expected in WG_CHECKS:
+            path = os.path.join(WG_REFS, rel.replace("/", os.sep))
+            if not os.path.exists(path):
+                errors.append("%s: file vendored mancante (%s)" % (name, rel))
+                continue
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                body = fh.read()
+            match = re.search(pattern, body, re.MULTILINE)
+            if not match:
+                errors.append("%s: pattern non trovato in %s (il pin e' cambiato?)" % (name, rel))
+                continue
+            actual = match.group(1)
+            if name not in wg_cs:
+                errors.append("%s: costante assente da WgConstants.cs" % name)
+                continue
+            cs_value = wg_cs[name].strip()
+            try:
+                if kind == "num":
+                    same = eval_int(actual) == eval_int(expected) == eval_int(cs_value)
+                else:
+                    same = actual == expected and cs_value.strip('"') == expected
+            except ValueError as ex:
+                errors.append("%s: valore non valutabile (%s)" % (name, ex))
+                continue
+            if not same:
+                errors.append("%s: vendored %r, atteso %r, WgConstants.cs %r"
+                              % (name, actual, expected, cs_value))
+                continue
+            checked += 1
+
+        # Coerenza del pin con le note WireGuard, stessa regola di sopra.
+        wg_pin_path = os.path.join(WG_REFS, "PINNED_VERSION.txt")
+        if os.path.exists(wg_pin_path):
+            with open(wg_pin_path, "r", encoding="utf-8") as fh:
+                wg_pin = fh.read()
+            wg_tag = re.search(r"ref=(\S+)", wg_pin)
+            if wg_tag and os.path.isfile(WG_NOTES):
+                with open(WG_NOTES, "r", encoding="utf-8") as fh:
+                    wg_notes = fh.read()
+                if wg_tag.group(1) not in wg_notes:
+                    errors.append("docs/wireguard-notes.md non cita il pin %s: le righe documentate sono di un'altra revisione"
+                                  % wg_tag.group(1))
+            elif wg_tag and not os.path.isfile(WG_NOTES):
+                errors.append("docs/wireguard-notes.md mancante: servono le note del protocollo pinnato")
     pin_path = os.path.join(REFS, "PINNED_VERSION.txt")
     if os.path.exists(pin_path):
         with open(pin_path, "r", encoding="utf-8") as fh:
@@ -117,7 +212,7 @@ def main():
             print("       - " + err)
         return 1
 
-    print("pin ok: %d costanti verificate contro refs/tailscale" % checked)
+    print("pin ok: %d costanti verificate contro refs/tailscale e refs/wireguard-go" % checked)
     return 0
 
 
