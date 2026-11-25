@@ -13,6 +13,7 @@ list work on the phone. Traffic does not pass through it yet.
 
 ![Windows Phone 8.1](https://img.shields.io/badge/platform-Windows%20Phone%208.1-0078D7)
 ![C-sharp 5](https://img.shields.io/badge/engine-C%23%205-68217A)
+![MIT License](https://img.shields.io/badge/license-MIT-green)
 
 </div>
 
@@ -220,7 +221,7 @@ Injector is missing or not listening.
   Every path, command and log line they cite is checked against the sources by
   `tools/check-agents.py`, which runs inside `tools/check-all.cmd`.
 - [AGENTS.md](AGENTS.md): how commits are written here.
-- License: none chosen yet. The Tailscale source that lands in `refs/` is
+- [License](LICENSE): MIT. The Tailscale source that lands in `refs/` is
   BSD-3-Clause and is not redistributed here; `tools/fetch-refs.py` downloads it.
 
 ---
@@ -422,5 +423,5 @@ significa che CMD Injector manca o non ascolta.
 
 ## Licenza
 
-Non ancora scelta. Il sorgente di Tailscale che finisce in `refs/` è BSD-3-Clause e
-non è ridistribuito qui: lo scarica `tools/fetch-refs.py`.
+Questo progetto è distribuito con licenza MIT; vedi [LICENSE](LICENSE). Il sorgente
+di Tailscale scaricato in `refs/` resta BSD-3-Clause e non viene ridistribuito qui.
