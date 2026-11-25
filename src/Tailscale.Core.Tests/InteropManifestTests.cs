@@ -24,6 +24,8 @@ namespace Tailscale.Core.Tests
             Case("valore: dword in hex e decimale sono lo stesso valore", HexAndDecimalDwordsAreEqual);
             Case("reg query: l'output diventa un valore", RegQueryOutputBecomesAValue);
             Case("reg query: nomi con spazi, dati vuoti e nomi prefisso", RegQuerySpacedNamesAndEmptyData);
+            Case("reg query: la presenza si legge dalle righe, non dalle frasi", PresenceIsProvenByLines);
+            Case("reg query: la riga della chiave si distingue dal resto", KeyLineIsNotJustAnyLine);
         }
 
         private static void Case(string name, Action test)
@@ -220,6 +222,55 @@ namespace Tailscale.Core.Tests
                        "    Vpn REG_SZ x    REG_SZ    y\r\n", "Vpn REG_SZ x", out value),
                    "reg query: un nome con il tipo dentro si legge");
             T.Eq("y", value.Text, "reg query: il dato e' quello dopo il tipo vero");
+        }
+
+        private static void PresenceIsProvenByLines()
+        {
+            // Una riga di valore conta anche con un tipo che il piano non sa
+            // descrivere: "c'e' ma non si legge" non e' "non c'e'".
+            T.True(RegQueryParser.HasValueLine(
+                "HKEY_LOCAL_MACHINE\\SOFTWARE\\TailscaleWP\r\n    VpnLink    REG_BINARY    0102\r\n",
+                "VpnLink"),
+                "una riga REG_BINARY e' una riga di valore");
+            T.True(RegQueryParser.HasValueLine(
+                "HKEY_LOCAL_MACHINE\\SOFTWARE\\TailscaleWP\r\n    Vpn Link    REG_MULTI_SZ    a\r\n    b\r\n",
+                "Vpn Link"),
+                "una riga REG_MULTI_SZ e' una riga di valore");
+
+            // Il nome si confronta per intero: un prefisso non basta.
+            string listing = "HKEY_LOCAL_MACHINE\\SOFTWARE\\TailscaleWP\r\n"
+                + "    Vpn Link    REG_SZ    x\r\n";
+            T.False(RegQueryParser.HasValueLine(listing, "Vpn"),
+                    "\"Vpn\" non prende la riga di \"Vpn Link\"");
+            T.True(RegQueryParser.HasValueLine(listing, "Vpn Link"),
+                   "il nome intero si trova");
+
+            // Un messaggio d'errore non contiene righe di valore, in nessuna lingua.
+            T.False(RegQueryParser.HasValueLine(
+                "ERROR: The system was unable to find the specified registry key or value.",
+                "VpnLink"),
+                "un messaggio d'errore non e' una riga di valore");
+            T.False(RegQueryParser.HasValueLine(
+                "Impossibile trovare la chiave o il valore del registro specificato.",
+                "VpnLink"),
+                "un messaggio in un'altra lingua non e' una riga di valore");
+        }
+
+        private static void KeyLineIsNotJustAnyLine()
+        {
+            string key = "HKEY_LOCAL_MACHINE\\SOFTWARE\\TailscaleWP";
+            T.True(RegQueryParser.HasKeyLine(key + "\r\n    VpnLink    REG_SZ    on\r\n", key),
+                   "la prima riga dell'elenco e' la chiave");
+            T.False(RegQueryParser.HasKeyLine(
+                "HKEY_LOCAL_MACHINE\\SOFTWARE\r\n    TailscaleWP\r\n",
+                "HKEY_LOCAL_MACHINE\\SOFTWARE\\TailscaleWP"),
+                "le sottochiavi elencate dal genitore sono nomi corti, non righe di chiave");
+            T.False(RegQueryParser.HasKeyLine(
+                key + "\r\n    VpnLink    REG_SZ    on\r\n", key + "\\VpnLink"),
+                "una riga di valore non e' una riga di chiave");
+            T.False(RegQueryParser.HasKeyLine(
+                "ERROR: Access is denied.", key),
+                "un messaggio d'errore non e' una riga di chiave");
         }
     }
 }

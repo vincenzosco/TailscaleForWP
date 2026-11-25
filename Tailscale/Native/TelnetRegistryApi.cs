@@ -225,7 +225,8 @@ namespace Tailscale.Native
             CheckShell(hive, "hive");
             CheckShell(path, "percorso");
             CheckShell(name, "nome del valore");
-            string output = _shell.Execute("reg query \"" + Key(hive, path) + "\" /v \"" + name + "\"");
+            string key = Key(hive, path);
+            string output = _shell.Execute("reg query \"" + key + "\" /v \"" + name + "\"");
             if (RegQueryParser.TryParseValue(output, name, out value)) return true;
 
             // Assenza dichiarata: reg.exe ha detto che il valore non c'e'.
@@ -235,10 +236,43 @@ namespace Tailscale.Native
                 return false;
             }
 
-            // Ne' valore ne' assenza: la risposta e' vuota o illeggibile (finestra
-            // di silenzio, risposta monca, decode corrotto). Un'assenza inventata
-            // qui diventerebbe un backup "<assente>" e il ripristino cancellerebbe
-            // il valore dell'utente: si fallisce e non si scrive niente.
+            // Le frasi di reg.exe cambiano con la lingua del sistema, quindi
+            // senza fidarsi delle parole l'assenza si prova con le righe.
+            if (!RegQueryParser.HasValueLine(output, name))
+            {
+                // Nessuna riga del valore: o il valore manca, o questa risposta
+                // e' guasta. Si riprova con l'elenco della chiave, dove un
+                // valore esistente compare sempre.
+                string listing = _shell.Execute("reg query \"" + key + "\"");
+                if (RegQueryParser.HasValueLine(listing, name))
+                {
+                    // C'e': il primo comando ha risposto male, non e' assente.
+                }
+                else if (RegQueryParser.HasKeyLine(listing, key))
+                {
+                    // La chiave si legge e il valore non compare: l'assenza e'
+                    // provata, in qualunque lingua.
+                    value = null;
+                    return false;
+                }
+                else if (!string.IsNullOrWhiteSpace(output)
+                         && !string.IsNullOrWhiteSpace(listing)
+                         && !RegQueryParser.HasKeyLine(output, key))
+                {
+                    // Entrambe le risposte sono un messaggio, non righe di
+                    // registro: due comandi di fila non hanno trovato ne' la
+                    // chiave ne' il valore. Una finestra di silenzio produce
+                    // stringhe vuote, non messaggi.
+                    value = null;
+                    return false;
+                }
+            }
+
+            // Ne' valore ne' assenza: il valore compare ma non si legge (un
+            // tipo che il piano non sa descrivere), oppure due risposte in fila
+            // non si capiscono. Un'assenza inventata qui diventerebbe un backup
+            // "<assente>" e il ripristino cancellerebbe il valore dell'utente:
+            // si fallisce e non si scrive niente.
             value = null;
             throw new InvalidOperationException("reg query illeggibile per "
                                                 + hive + "\\" + path + "\\" + name);
