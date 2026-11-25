@@ -18,6 +18,10 @@
       deve compilare con lo stesso linguaggio su telefono e su PC.
     -->
     <LangVersion>5</LangVersion>
+    <AppxBundlePlatforms Condition="'$(AppxBundlePlatforms)' == '' and '$(Platform)' == 'ARM'">arm</AppxBundlePlatforms>
+    <AppxBundlePlatforms Condition="'$(AppxBundlePlatforms)' == '' and '$(Platform)' == 'x86'">x86</AppxBundlePlatforms>
+    <AppxBundlePlatforms Condition="'$(AppxBundlePlatforms)' == '' and '$(Platform)' == 'AnyCPU'">neutral</AppxBundlePlatforms>
+    <AppxAutoIncrementPackageRevision>True</AppxAutoIncrementPackageRevision>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <PlatformTarget>AnyCPU</PlatformTarget>
