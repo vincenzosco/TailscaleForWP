@@ -123,6 +123,12 @@ only touches `HKLM\SOFTWARE\TailscaleWP`), and the same manifest generates the
 `provision.bat` payload for CMD Injector: see
 [provisioning/README.md](provisioning/README.md).
 
+The WP8.1 Runtime package requests `ID_CAP_INTEROPSERVICES` through
+`Tailscale/WindowsPhoneReservedAppInfo.xml`; putting it in
+`Package.appxmanifest` is rejected by the AppX schema. This reserved capability
+metadata is for local sideload/development and does not itself grant registry
+writes or replace CMD Injector.
+
 > **The app cannot write the registry from its own sandbox**, not even on an
 > interop-unlocked phone. The automatic path needs CMD Injector installed and
 > running, with its telnet service on `127.0.0.1:23`. Without it the app refuses
@@ -326,6 +332,12 @@ collega. Cosa si scrive lo decide `vpn-manifest.txt` nella cartella dell'app (il
 manifest integrato tocca solo `HKLM\SOFTWARE\TailscaleWP`), e lo stesso manifest
 genera il payload `provision.bat` per CMD Injector: vedi
 [provisioning/README.md](provisioning/README.md).
+
+Il pacchetto WP8.1 Runtime richiede `ID_CAP_INTEROPSERVICES` tramite
+`Tailscale/WindowsPhoneReservedAppInfo.xml`; inserirla in
+`Package.appxmanifest` viene rifiutato dallo schema AppX. Questi metadati di
+capability riservata servono per installazione locale e sviluppo: da soli non
+autorizzano la scrittura del registro e non sostituiscono CMD Injector.
 
 > **L'app non può scrivere il registro dalla propria sandbox**, nemmeno con
 > l'interop unlock. Il percorso automatico richiede CMD Injector installato e
