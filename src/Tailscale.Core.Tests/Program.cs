@@ -48,6 +48,8 @@ namespace Tailscale.Core.Tests
             Run("stati tcp", TcpStateTests.Run);
             Run("tunnel", TunnelTests.Run);
             Run("tunnel keepalive", TunnelKeepaliveTests.Run);
+            Run("udp inoltro", UdpForwarderTests.Run);
+            Run("dns resolver", DnsResolverTests.Run);
 
             Console.WriteLine(T.Failures == 0 ? "ALL PASS" : "FAILURES: " + T.Failures);
             return T.Failures;
