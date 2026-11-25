@@ -1,76 +1,46 @@
 <p align="center">
-  <img src="Tailscale/Assets/Logo.scale-240.png" width="128" alt="TailscaleForWP icon: a dark rounded square with nine dots in a grid">
+  <img src="Tailscale/Assets/Logo.scale-240.png" width="128" alt="TailscaleForWP icon">
 </p>
 
 <div align="center">
 
 # TailscaleForWP
 
-**A Tailscale client for Windows Phone 8.1.** It speaks the real Tailscale control
-protocol (ts2021, Noise IK) from a 2014 phone that has only .NET 4.5 and the WP8.1
-reference profile.
+**A Tailscale client for Windows Phone 8.1.** Sign-in, registration and the peer
+list work on the phone. Traffic does not pass through it yet.
 
-[The proof](#the-proof-that-matters) · [Build and verify](#build-and-verify) · [Use it](#use-it) · [Troubleshooting](#troubleshooting) · [Italiano](#italiano)
+[What works](#what-works-today) · [Build and verify](#build-and-verify) · [Use it](#use-it) · [Troubleshooting](#troubleshooting) · [Italiano](#italiano)
 
 ![Windows Phone 8.1](https://img.shields.io/badge/platform-Windows%20Phone%208.1-0078D7)
 ![C-sharp 5](https://img.shields.io/badge/engine-C%23%205-68217A)
 
 </div>
 
-TailscaleForWP is one WP8.1 app and one portable engine written in C# 5, built by
-reading the pinned Tailscale source instead of from memory. There is no server of
-mine in the picture: the control plane it talks to is the real Tailscale one. On
-2026-10-11 the app ran on a real Lumia and came back with the netmap of a real
-tailnet. What it does not do yet is move traffic: the data plane is still to be
-written.
+One app for the phone and one portable engine, both C# 5. The engine speaks the
+Tailscale control protocol (ts2021, Noise IK) with `controlplane.tailscale.com`,
+the same one the official clients use. There is no server of mine in the middle.
 
-## Status
+## What works today
 
-- **Good for:** getting a real tailnet's control plane onto a Windows Phone 8.1
-  device: sign-in, registration, the netmap, and a log that survives the app.
-- **Not for:** moving traffic. There is no data plane yet (no WireGuard, no proxy),
-  so nothing on the phone reaches a peer through it today.
+- **Good for:** getting a tailnet's control plane onto a WP8.1 phone: sign-in,
+  registration, the peer list, and a log that survives the app.
+- **Not for:** moving traffic. There is no data plane (no WireGuard, no proxy),
+  so no app on the phone reaches a peer through this today.
 
 | Part | State | How it is checked |
 |---|---|---|
-| Crypto (X25519, ChaCha20-Poly1305, BLAKE2s, SHA-256, HKDF, NaCl box) | done | RFC 7748 / 8439 / 7693 / 5869 vectors and independent TweetNaCl vectors |
-| Noise IK handshake, ts2021 dialer, HTTP upgrade | done | `Tailscale.Cli handshake` against `controlplane.tailscale.com` |
-| Registration, netmap, sign-in URL | works on a real device | in-memory tests for the state machine, and a phone run on 2026-10-11; the first sign-in still needs a person at the browser |
-| App UI (sign-in, device list, log) | done in code | every visible string checked by `tools/check-ui-resources.py`; acceptance on a phone is still manual |
-| Phone log (`LocalFolder\registro.log`) | done | pulled off a real phone with `ISETool.exe` on 2026-10-11 |
-| Localized en-US and it-IT | done | `tools/check-ui-resources.py` checks both languages |
+| Crypto (X25519, ChaCha20-Poly1305, BLAKE2s, SHA-256, HKDF, NaCl box) | done | RFC 7748 / 8439 / 7693 / 5869 vectors, plus independent TweetNaCl vectors |
+| Noise IK handshake, ts2021 dialer | done | `Tailscale.Cli handshake` against `controlplane.tailscale.com` |
+| Registration, netmap, sign-in URL | works on a phone | state machine tests in memory, and a phone run on 2026-10-11; the first sign-in still needs a person at the browser |
+| App UI (sign-in, device list, log) | done in code | every visible string checked by `tools/check-ui-resources.py`; phone acceptance is still manual |
+| Phone log (`LocalFolder\registro.log`) | done | pulled from a real phone with `ISETool.exe` on 2026-10-11 |
+| en-US and it-IT strings | done | `tools/check-ui-resources.py` checks both |
+| VPN link settings via interop registry | done | provision and revert run against a scratch registry key, see [provisioning/README.md](provisioning/README.md) |
 | Data plane (WireGuard, proxy) | not started | nothing yet |
-
-What "works" means here, from that real run: the log pulled off the phone shows the
-ts2021 handshake, `/machine/register -> 200`, and the state going
-`Connecting -> Authorized`. Stopping the app on purpose produced the `0x800703E3`
-abort, the client recognised it, and the engine came back with the same node key, so
-the tailnet kept seeing one device. That run also found a bug no test could see: the
-page opened on a black screen, because the first paint read the device name before
-the engine had written it. It is fixed (`Tailscale/Services/EngineService.cs` never
-returns a null device name), and a crash on the UI thread now leaves a line in the
-log instead of taking the app down in silence.
-
-## The proof that matters
-
-```
-src\Tailscale.Cli\bin\Release\Tailscale.Cli.exe handshake
-server key ts2021=mkey:7d2792f9c98d753d2042471536801949104c247f95eac770f8fb321595e2173b
-            legacy=mkey:9e5156a4c65121306dd2d8ed8f92cb8d738e2533011344b522c5d28409bc4970
-ts2021: upgrade accettato su http://controlplane.tailscale.com:80
-handshake ok, peer=mkey:7d2792f9c98d753d2042471536801949104c247f95eac770f8fb321595e2173b
-handshake hash=4754800d5370c4209dde12d541b20b85528d6787e1fbb13bd666d21693d0c973
-versione del protocollo=148
-```
-
-This is not a round-trip with itself. The real server accepts our 101-byte message 1
-and answers with a message whose tag verifies against the public key it publishes at
-`/key`. If the transcription of Noise IK, HKDF-BLAKE2s, X25519 or ChaCha20-Poly1305
-were wrong by one byte, that tag would not verify.
 
 ## Build and verify
 
-On a Windows PC you need MSBuild 12.0 (VS2013), the Windows Phone 8.1 SDK and
+You need a Windows PC with MSBuild 12.0 (VS2013), the Windows Phone 8.1 SDK and
 Python 3. No NuGet, no dotnet, no Go.
 
 ```
@@ -78,47 +48,64 @@ tools\check-all.cmd
 ```
 
 It checks the protocol pin, the UI strings and the agent skills first, then builds
-the desktop core, runs the tests, runs the CLI offline selftest and builds the ARM
-package of the app. The first problem stops it. When everything is fine the last
-line is `CHECK-ALL OK`.
+the desktop core, runs the tests, runs the CLI selftest and builds the ARM package
+of the app. The first problem stops it. When everything is fine the last line is
+`CHECK-ALL OK`.
 
-The ARM build is not decoration. It is the check that found every platform limit of
-this project: WP8.1 has no `System.Security.Cryptography`, no `System.Net.Sockets`,
-no `Encoding.ASCII`, and `HttpWebRequest` only works asynchronously. That is why the
-core takes `IRandomSource`, `IStreamConnector`, `IHttpFetcher` and `Sleep` as injected
-dependencies instead of calling an API directly.
+One of the checks talks to the live server. This is what `handshake` printed on
+2026-11-22 from this repo:
+
+```
+src\Tailscale.Cli\bin\Release\Tailscale.Cli.exe handshake
+server key ts2021=mkey:7d2792f9c98d753d2042471536801949104c247f95eac770f8fb321595e2173b
+            legacy=mkey:9e5156a4c65121306dd2d8ed8f92cb8d738e2533011344b522c5d28409bc4970
+ts2021: upgrade accettato su http://controlplane.tailscale.com:80
+handshake ok, peer=mkey:7d2792f9c98d753d2042471536801949104c247f95eac770f8fb321595e2173b
+handshake hash=389aafa04037612c14cecffd0b40436369b78021d1bc3f0003448b3910ec715e
+versione del protocollo=148
+```
+
+The hash changes at every run, the server key and the protocol version do not. The
+server's answer only verifies if our Noise IK and cipher code matches its own, byte
+for byte, so a wrong transcription fails here instead of failing on the phone.
+
+The ARM build is where the WP8.1 limits bite: no `System.Security.Cryptography`, no
+`System.Net.Sockets`, no `Encoding.ASCII`, and `HttpWebRequest` only works
+asynchronously. That is why the core takes `IRandomSource`, `IStreamConnector`,
+`IHttpFetcher` and `Sleep` as injected dependencies: the same code runs in the
+desktop tests, offline.
 
 ## Use it
 
-**On the PC.** The CLI is where the protocol meets the real server:
+**On the PC.** The CLI talks to the live server:
 
 ```
-src\Tailscale.Cli\bin\Release\Tailscale.Cli.exe handshake   # Noise IK handshake against the real control server
-src\Tailscale.Cli\bin\Release\Tailscale.Cli.exe probe       # HTTP/2 diagnostics
-src\Tailscale.Cli\bin\Release\Tailscale.Cli.exe login       # prints the sign-in URL; the browser step needs a person
-src\Tailscale.Cli\bin\Release\Tailscale.Cli.exe selftest    # offline, no network
+src\Tailscale.Cli\bin\Release\Tailscale.Cli.exe handshake             # Noise IK handshake with the Tailscale control server
+src\Tailscale.Cli\bin\Release\Tailscale.Cli.exe probe                 # HTTP/2 diagnostics
+src\Tailscale.Cli\bin\Release\Tailscale.Cli.exe login                 # prints the sign-in URL; the browser step needs a person
+src\Tailscale.Cli\bin\Release\Tailscale.Cli.exe selftest              # offline, no network
+src\Tailscale.Cli\bin\Release\Tailscale.Cli.exe provision [manifest] [out-dir]   # writes provision.bat and deprovision.bat for CMD Injector
 ```
 
-**On the phone.** Deploy the package the gate built. Unlock the phone screen first,
-or the launch command gives up.
+**On the phone.** Deploy the package the gate built. Unlock the screen first, or
+the launch gives up.
 
 ```
 "C:\Program Files (x86)\Microsoft SDKs\Windows Phone\v8.1\Tools\AppDeploy\AppDeployCmd.exe" /installlaunch Tailscale\bin\ARM\Release\Tailscale_1.0.0.0_Bundle\Tailscale_1.0.0.0_ARM.appx /targetdevice:de
 ```
 
-The engine starts by itself when the app opens. The line under the device name walks
-through `Connecting...`, `Sign in required`, `Connected`, `Error`, `Stopped`, and the
+The engine starts when the app opens. The line under the device name moves through
+`Connecting...`, `Sign in required`, `Connected`, `Error` and `Stopped`, and the
 button says what it does: `Start`, `Stop` or `Sign in`. The first time, the browser
 opens on the Tailscale sign-in page; come back to the app afterwards.
 
-> **`/installlaunch` resets the saved identity.** Reinstalling puts the app back at a
-> first start: new node key, sign-in in the browser. To open the same install again
-> without signing in, use `/launch 563a8f70-0e06-4690-b075-3963581a75c8 /targetdevice:de`.
-> The product id is in `Tailscale/Package.appxmanifest`.
+> **`/installlaunch` resets the saved identity.** You get a first start: new node
+> key, sign-in in the browser. To open the same install again without signing in,
+> use `/launch 563a8f70-0e06-4690-b075-3963581a75c8 /targetdevice:de`. The product
+> id is in `Tailscale/Package.appxmanifest`.
 
-**The log.** The engine writes `LocalFolder\registro.log` (the screen keeps the last
-200 lines, the file 400), and the SDK copies it to the PC. This is the difference
-between a failure that leaves evidence and one that leaves a screenshot:
+**The log.** The engine writes `LocalFolder\registro.log` (the screen keeps 200
+lines, the file 400). To copy it to the PC:
 
 ```
 ISETool.exe EnumerateDevices
@@ -126,18 +113,22 @@ ISETool.exe ts de 563a8f70-0e06-4690-b075-3963581a75c8 C:\temp\registro
 ISETool.exe ts xd 563a8f70-0e06-4690-b075-3963581a75c8 C:\temp\registro
 ```
 
-`ISETool.exe` lives in `C:\Program Files (x86)\Microsoft SDKs\Windows Phone\v8.1\Tools\IsolatedStorageExplorerTool\`. The first command is a connected phone, the second the default emulator.
+`ISETool.exe` lives in `C:\Program Files (x86)\Microsoft SDKs\Windows Phone\v8.1\Tools\IsolatedStorageExplorerTool\`. `de` is a connected phone, `xd` the default emulator.
 
-**The VPN link via interop.** On an interop-unlocked phone the app can add and
-switch a system connection by itself: one tap on the page, or automatically when
-the engine connects. The status line is read back from the registry, so
-"connected" means the values are really there, and every previous value is backed
-up before anything is written. What gets written is decided by `vpn-manifest.txt`
-in the app folder (or by the built-in manifest, which only touches
-`HKLM\SOFTWARE\TailscaleWP`), and the same manifest generates the
+**The VPN link.** On a phone with interop unlock the app can add and switch a
+system connection with one tap, or by itself when the engine connects. What gets
+written is decided by `vpn-manifest.txt` in the app folder (the built-in manifest
+only touches `HKLM\SOFTWARE\TailscaleWP`), and the same manifest generates the
 `provision.bat` payload for CMD Injector: see
-[provisioning/README.md](provisioning/README.md). The registry does not create a
-tunnel: it stores configuration and points the system connection, nothing more.
+[provisioning/README.md](provisioning/README.md).
+
+> **The app cannot write the registry from its own sandbox**, not even on an
+> interop-unlocked phone. The automatic path needs CMD Injector installed and
+> running, with its telnet service on `127.0.0.1:23`. Without it the app refuses
+> to write anything, on purpose.
+
+And the registry does not create a tunnel: it stores configuration and points the
+system connection, nothing more.
 
 ## Troubleshooting
 
@@ -146,7 +137,7 @@ tunnel: it stores configuration and points the system connection, nothing more.
 <br>
 
 Most of the time the phone screen is locked. Unlock it and run the launch again.
-Without the app running there is no log to read, so this one is worth fixing first.
+Without the app running there is no log to read, so fix this one first.
 
 </details>
 
@@ -154,8 +145,8 @@ Without the app running there is no log to read, so this one is worth fixing fir
 <summary><strong>The install or launch fails with 0xC0000005 or 0x87B20C0A</strong></summary>
 <br>
 
-That is the launcher tool failing on its own, not the app. Run it again. The second
-attempt usually goes through.
+That is the launcher tool failing on its own, not the app. Run it again. The
+second attempt usually goes through.
 
 </details>
 
@@ -163,11 +154,11 @@ attempt usually goes through.
 <summary><strong>The log is full of 0x800703E3 aborts</strong></summary>
 <br>
 
-That error is what a control-channel read looks like when the app is suspended: the
-app closes the socket on purpose. The client recognises it as a broken channel, and
-on the way back to the foreground the engine starts again with the same node key, so
-the tailnet still sees one device. If the same error shows up while the app is in the
-foreground, pull the log and keep the lines around it.
+That is what a control-channel read looks like when the app is suspended: the app
+closes the socket on purpose. The client takes it as a broken channel and the
+engine comes back with the same node key, so the tailnet still sees one device.
+If the same error shows up while the app is in the foreground, pull the log and
+keep the lines around it.
 
 </details>
 
@@ -175,10 +166,23 @@ foreground, pull the log and keep the lines around it.
 <summary><strong>Signing in created a second device in the admin console</strong></summary>
 <br>
 
-A device deleted from the admin console does not free its node key on the server, and
-reinstalling the package resets the identity, so the app registers again as a new
-device. Launch the existing install with `/launch` instead of `/installlaunch` and
-the identity survives.
+A device deleted from the admin console keeps its node key on the server, and
+reinstalling resets the identity, so the app registers again as a new device.
+Launch the existing install with `/launch` instead of `/installlaunch` and the
+identity survives.
+
+</details>
+
+<details>
+<summary><strong>The VPN button says the phone has no interop, but it has</strong></summary>
+<br>
+
+That message is about the registry channels, not about your phone. The app's
+sandbox cannot write `HKLM` even with interop unlock, so the automatic path needs
+CMD Injector and its telnet service on `127.0.0.1:23`. Install or start CMD
+Injector and try again. In `registro.log` the line `vpn: canale telnet ...
+verificato` means the channel is there; `vpn: telnet non disponibile` means CMD
+Injector is missing or not listening.
 
 </details>
 
@@ -189,25 +193,26 @@ the identity survives.
 - The tests run offline and without a Tailscale account, because everything that
   touches the network or randomness is injected (`IRandomSource`, `IStreamConnector`,
   `IHttpFetcher`, `Sleep`).
-- The protocol pin is enforced, not written down: `tools/check-protocol-pin.py`
-  compares `ProtocolConstants` against the pinned `tailscale` and `wireguard-go`
-  sources (revisions in `tools/refs.lock`, downloaded into `refs/` by
-  `tools/fetch-refs.py`). If code and source disagree, the gate fails.
+- The protocol pin has its own gate:
+  `tools/check-protocol-pin.py` compares `ProtocolConstants` against the pinned
+  `tailscale` and `wireguard-go` sources (revisions in `tools/refs.lock`,
+  downloaded into `refs/` by `tools/fetch-refs.py`). If code and source disagree,
+  the gate fails.
 - The plan documents live in `docs/`, which is not committed to git. On GitHub you
   get the code, the agent skills and this README.
 
 ## Security
 
-- No private key is written to the log or printed. The CLI shows public keys only,
-  and a test checks its output for secret material.
-- The handshake is authenticated: the server's manifest verifies against the key it
-  publishes at `/key`, so a proxy in the middle cannot impersonate the control
-  server. The first message goes out in the clear on port 80 and that does not
-  weaken it.
+- No private key goes into the log or on the screen. The CLI prints public keys
+  only, and a test checks its output for secret material.
+- The handshake is authenticated: the server's manifest verifies against the key
+  it publishes at `/key`, so a proxy in the middle cannot impersonate the control
+  server. The first message goes out in the clear on port 80 and does not weaken
+  it.
 - TLS 1.2 is required explicitly, because .NET 4.5 negotiates TLS 1.0 and the
   server refuses it.
-- Private keys on the phone belong in the `PasswordVault`. The store that does that
-  is planned, not written.
+- Private keys on the phone belong in the `PasswordVault`. The store that does
+  that is planned, not written.
 
 ## More
 
@@ -224,108 +229,87 @@ the identity survives.
 
 [English](#tailscaleforwp) | **Italiano**
 
-Un client **Tailscale per Windows Phone 8.1**: un'app WP8.1 e un motore portabile in
-C# 5, scritto leggendo il sorgente di Tailscale pinnato invece che dalla memoria. Non
-c'è nessun mio server in mezzo: il control plane è quello vero di Tailscale. Il
-2026-10-11 l'app è girata su un Lumia vero ed è tornata con la netmap di un tailnet
-vero. Quello che ancora non fa è muovere traffico: il piano dati non è scritto.
+Un client **Tailscale per Windows Phone 8.1**: un'app per il telefono e un motore
+portabile, entrambi in C# 5. Il motore parla il protocollo di controllo Tailscale
+(ts2021, Noise IK) con `controlplane.tailscale.com`, lo stesso dei client ufficiali.
+Non c'è nessun mio server in mezzo. Il traffico non passa ancora da qui: il piano
+dati non è scritto.
 
-## Stato
+## Cosa funziona oggi
 
-- **Va bene per:** portare il control plane di un tailnet vero su un telefono
-  Windows Phone 8.1: accesso, registrazione, netmap e un registro che sopravvive
-  all'app.
-- **Non va bene per:** muovere traffico. Non c'è ancora un piano dati (niente
-  WireGuard, niente proxy), quindi oggi nessuna app del telefono passa da qui.
+- **Va bene per:** portare il control plane di un tailnet su un telefono WP8.1:
+  accesso, registrazione, elenco dei peer e un registro che sopravvive all'app.
+- **Non va bene per:** muovere traffico. Non c'è un piano dati (niente WireGuard,
+  niente proxy): oggi nessuna app del telefono passa da qui.
 
 | Parte | Stato | Come è verificato |
 |---|---|---|
 | Primitive crittografiche (X25519, ChaCha20-Poly1305, BLAKE2s, SHA-256, HKDF, NaCl box) | fatto | Vector RFC 7748 / 8439 / 7693 / 5869 e vector indipendenti TweetNaCl |
-| Handshake Noise IK, dialer ts2021, upgrade HTTP | fatto | `Tailscale.Cli handshake` contro `controlplane.tailscale.com` |
-| Registrazione, netmap, URL di accesso | funziona su un telefono vero | test in memoria sulla macchina a stati, e una corsa sul telefono il 2026-10-11; il primo accesso richiede ancora una persona al browser |
+| Handshake Noise IK, dialer ts2021 | fatto | `Tailscale.Cli handshake` contro `controlplane.tailscale.com` |
+| Registrazione, netmap, URL di accesso | funziona su un telefono | test in memoria sulla macchina a stati, e una corsa sul telefono il 2026-10-11; il primo accesso richiede ancora una persona al browser |
 | UI dell'app (accesso, elenco dispositivi, registro) | fatto nel codice | ogni stringa visibile controllata da `tools/check-ui-resources.py`; l'accettazione sul telefono è ancora manuale |
 | Registro del telefono (`LocalFolder\registro.log`) | fatto | tirato giù da un telefono vero con `ISETool.exe` il 2026-10-11 |
-| Localizzazione en-US e it-IT | fatto | `tools/check-ui-resources.py` controlla entrambe le lingue |
+| Stringhe en-US e it-IT | fatto | `tools/check-ui-resources.py` controlla entrambe |
+| Impostazioni del collegamento VPN via registro | fatto | provision e revert provati su una chiave di registro di prova, vedi [provisioning/README.md](provisioning/README.md) |
 | Piano dati (WireGuard, proxy) | non iniziato | niente |
-
-Cosa vuol dire "funziona", da quella corsa vera: il registro tirato giù dal telefono
-mostra l'handshake ts2021, `/machine/register -> 200` e lo stato che va in
-`Connecting -> Authorized`. Fermando l'app di proposito è comparso l'abort
-`0x800703E3`, il client l'ha riconosciuto e il motore è ripartito con la stessa node
-key: il tailnet ha continuato a vedere un dispositivo solo. La stessa corsa ha trovato
-un guasto che nessun test poteva vedere: la pagina si apriva con lo schermo nero,
-perché il primo disegno leggeva il nome del dispositivo prima che il motore lo
-scrivesse. È corretto (`Tailscale/Services/EngineService.cs` non restituisce mai un
-nome nullo), e un'eccezione sul thread della UI ora lascia una riga nel registro.
-
-## La prova che conta
-
-```
-src\Tailscale.Cli\bin\Release\Tailscale.Cli.exe handshake
-server key ts2021=mkey:7d2792f9c98d753d2042471536801949104c247f95eac770f8fb321595e2173b
-            legacy=mkey:9e5156a4c65121306dd2d8ed8f92cb8d738e2533011344b522c5d28409bc4970
-ts2021: upgrade accettato su http://controlplane.tailscale.com:80
-handshake ok, peer=mkey:7d2792f9c98d753d2042471536801949104c247f95eac770f8fb321595e2173b
-handshake hash=4754800d5370c4209dde12d541b20b85528d6787e1fbb13bd666d21693d0c973
-versione del protocollo=148
-```
-
-Non è un round-trip con se stessi. Il server vero accetta il nostro messaggio 1 da
-101 byte e risponde con un messaggio il cui tag verifica contro la chiave pubblica
-che pubblica in `/key`. Se la trascrizione di Noise IK, HKDF-BLAKE2s, X25519 o
-ChaCha20-Poly1305 fosse sbagliata anche di un byte, quel tag non verificherebbe.
 
 ## Costruire e verificare
 
-Su un PC Windows servono MSBuild 12.0 (VS2013), lo SDK Windows Phone 8.1 e Python 3.
-Niente NuGet, niente dotnet, niente Go.
+Su un PC Windows servono MSBuild 12.0 (VS2013), lo SDK Windows Phone 8.1 e
+Python 3. Niente NuGet, niente dotnet, niente Go.
 
 ```
 tools\check-all.cmd
 ```
 
 Controlla prima il pin del protocollo, le stringhe della UI e le skill degli agent,
-poi costruisce il core desktop, esegue i test, lancia il selftest offline della CLI e
-costruisce il pacchetto ARM dell'app. Al primo problema si ferma. Se tutto va bene
-l'ultima riga è `CHECK-ALL OK`.
+poi costruisce il core desktop, esegue i test, lancia il selftest offline della CLI
+e costruisce il pacchetto ARM dell'app. Al primo problema si ferma. Se tutto va
+bene l'ultima riga è `CHECK-ALL OK`.
 
-La build ARM non è un ornamento: è il controllo che ha trovato ogni vincolo di
-piattaforma di questo progetto. WP8.1 non ha `System.Security.Cryptography`, non ha
-`System.Net.Sockets`, non ha `Encoding.ASCII` e `HttpWebRequest` funziona solo in
-asincrono. Per questo il core riceve `IRandomSource`, `IStreamConnector`,
-`IHttpFetcher` e `Sleep` come dipendenze iniettate invece di chiamare le API.
+Uno dei controlli parla con il server vivo: l'output di `handshake` del 2026-11-22
+è nella [sezione inglese](#build-and-verify). L'hash cambia a ogni corsa, la chiave
+del server e la versione del protocollo no. La risposta del server verifica solo se
+il nostro Noise IK e il nostro codice dei cifrari coincidono con i suoi, byte per
+byte: una trascrizione sbagliata fallisce qui, non sul telefono.
+
+La build ARM è dove si sentono i vincoli di WP8.1: niente
+`System.Security.Cryptography`, niente `System.Net.Sockets`, niente
+`Encoding.ASCII`, e `HttpWebRequest` funziona solo in asincrono. Per questo il core
+riceve `IRandomSource`, `IStreamConnector`, `IHttpFetcher` e `Sleep` come
+dipendenze iniettate: lo stesso codice gira nei test desktop, offline.
 
 ## Usarla
 
-**Sul PC.** La CLI è dove il protocollo incontra il server vero:
+**Sul PC.** La CLI parla con il server vivo:
 
 ```
-src\Tailscale.Cli\bin\Release\Tailscale.Cli.exe handshake   # handshake contro il server di controllo vero
-src\Tailscale.Cli\bin\Release\Tailscale.Cli.exe probe       # diagnostica HTTP/2
-src\Tailscale.Cli\bin\Release\Tailscale.Cli.exe login       # stampa l'URL di accesso; il passo nel browser richiede una persona
-src\Tailscale.Cli\bin\Release\Tailscale.Cli.exe selftest    # offline, senza rete
+src\Tailscale.Cli\bin\Release\Tailscale.Cli.exe handshake             # handshake Noise IK con il server di controllo Tailscale
+src\Tailscale.Cli\bin\Release\Tailscale.Cli.exe probe                 # diagnostica HTTP/2
+src\Tailscale.Cli\bin\Release\Tailscale.Cli.exe login                 # stampa l'URL di accesso; il passo nel browser richiede una persona
+src\Tailscale.Cli\bin\Release\Tailscale.Cli.exe selftest              # offline, senza rete
+src\Tailscale.Cli\bin\Release\Tailscale.Cli.exe provision [manifest] [out-dir]   # scrive provision.bat e deprovision.bat per CMD Injector
 ```
 
 **Sul telefono.** Installa il pacchetto che ha costruito il gate. Prima sblocca lo
-schermo, sennò il comando di avvio si arrende.
+schermo, sennò il comando di lancio si arrende.
 
 ```
 "C:\Program Files (x86)\Microsoft SDKs\Windows Phone\v8.1\Tools\AppDeploy\AppDeployCmd.exe" /installlaunch Tailscale\bin\ARM\Release\Tailscale_1.0.0.0_Bundle\Tailscale_1.0.0.0_ARM.appx /targetdevice:de
 ```
 
-Il motore parte da solo quando si apre l'app. La riga sotto il nome del dispositivo
-passa per `Connecting...`, `Sign in required`, `Connected`, `Error`, `Stopped`, e il
+Il motore parte quando si apre l'app. La riga sotto il nome del dispositivo passa
+per `Connecting...`, `Sign in required`, `Connected`, `Error` e `Stopped`, e il
 pulsante dice quello che fa: `Start`, `Stop` o `Sign in`. La prima volta il browser
 si apre sulla pagina di accesso di Tailscale; poi si torna nell'app.
 
-> **`/installlaunch` azzera l'identità salvata.** Reinstallare riporta l'app a un
-> primo avvio: node key nuova, accesso nel browser. Per riaprire la stessa installazione
-> senza rifare l'accesso usa `/launch 563a8f70-0e06-4690-b075-3963581a75c8 /targetdevice:de`.
+> **`/installlaunch` azzera l'identità salvata.** Si riparte da zero: node key
+> nuova, accesso nel browser. Per riaprire la stessa installazione senza rifare
+> l'accesso usa `/launch 563a8f70-0e06-4690-b075-3963581a75c8 /targetdevice:de`.
 > L'id del prodotto è in `Tailscale/Package.appxmanifest`.
 
-**Il registro.** Il motore scrive `LocalFolder\registro.log` (lo schermo tiene le
-ultime 200 righe, il file 400) e l'SDK lo copia sul PC. È la differenza fra un guasto
-che lascia una prova e uno che lascia uno screenshot:
+**Il registro.** Il motore scrive `LocalFolder\registro.log` (lo schermo tiene 200
+righe, il file 400). Per copiarlo sul PC:
 
 ```
 ISETool.exe EnumerateDevices
@@ -333,19 +317,22 @@ ISETool.exe ts de 563a8f70-0e06-4690-b075-3963581a75c8 C:\temp\registro
 ISETool.exe ts xd 563a8f70-0e06-4690-b075-3963581a75c8 C:\temp\registro
 ```
 
-`ISETool.exe` sta in `C:\Program Files (x86)\Microsoft SDKs\Windows Phone\v8.1\Tools\IsolatedStorageExplorerTool\`. Il primo comando è per il telefono collegato, il secondo per l'emulatore predefinito.
+`ISETool.exe` sta in `C:\Program Files (x86)\Microsoft SDKs\Windows Phone\v8.1\Tools\IsolatedStorageExplorerTool\`. `de` è un telefono collegato, `xd` l'emulatore predefinito.
 
-**Il collegamento VPN via interop.** Su un telefono con interop unlock l'app sa
-aggiungere e attivare un collegamento di sistema da sola: un tocco sulla pagina,
-oppure in automatico quando il motore si collega. La riga di stato viene riletta
-dal registro, quindi "collegata" significa che i valori ci sono davvero, e ogni
-valore precedente viene salvato prima di scrivere. Cosa si scrive lo decide
-`vpn-manifest.txt` nella cartella dell'app (oppure il manifest integrato, che
-tocca solo `HKLM\SOFTWARE\TailscaleWP`), e lo stesso manifest genera il payload
-`provision.bat` per CMD Injector: vedi
-[provisioning/README.md](provisioning/README.md). Il registro non crea alcun
-tunnel: conserva la configurazione e punta il collegamento di sistema, niente di
-più.
+**Il collegamento VPN.** Su un telefono con interop unlock l'app sa aggiungere e
+attivare un collegamento di sistema con un tocco, o da sola quando il motore si
+collega. Cosa si scrive lo decide `vpn-manifest.txt` nella cartella dell'app (il
+manifest integrato tocca solo `HKLM\SOFTWARE\TailscaleWP`), e lo stesso manifest
+genera il payload `provision.bat` per CMD Injector: vedi
+[provisioning/README.md](provisioning/README.md).
+
+> **L'app non può scrivere il registro dalla propria sandbox**, nemmeno con
+> l'interop unlock. Il percorso automatico richiede CMD Injector installato e
+> avviato, con il servizio telnet su `127.0.0.1:23`. Senza, l'app non scrive
+> niente, di proposito.
+
+E il registro non crea alcun tunnel: conserva la configurazione e punta il
+collegamento di sistema, niente di più.
 
 ## Se qualcosa non va
 
@@ -354,7 +341,8 @@ più.
 <br>
 
 Nove volte su dieci lo schermo del telefono è bloccato. Sbloccalo e rifai il lancio:
-senza l'app avviata non c'è nessun registro da leggere.
+senza l'app avviata non c'è nessun registro da leggere, quindi questo si sistema
+per primo.
 
 </details>
 
@@ -371,11 +359,11 @@ secondo tentativo passa.
 <summary><strong>Nel registro è pieno di abort 0x800703E3</strong></summary>
 <br>
 
-Quell'errore è come si presenta una lettura sul canale di controllo quando l'app va
-in sospensione: l'app chiude il socket di proposito. Il client lo riconosce come
-canale rotto e al ritorno in primo piano il motore riparte con la stessa node key. Se
-lo stesso errore compare con l'app in primo piano, tira giù il registro e conserva le
-righe intorno.
+È come si presenta una lettura sul canale di controllo quando l'app va in
+sospensione: l'app chiude il socket di proposito. Il client lo prende come canale
+rotto e il motore riparte con la stessa node key, quindi il tailnet vede sempre un
+dispositivo solo. Se lo stesso errore compare con l'app in primo piano, tira giù il
+registro e conserva le righe intorno.
 
 </details>
 
@@ -383,40 +371,54 @@ righe intorno.
 <summary><strong>L'accesso ha creato un secondo dispositivo nella console admin</strong></summary>
 <br>
 
-Un dispositivo cancellato dalla console non libera la node key sul server, e
-reinstallare il pacchetto azzera l'identità: l'app si registra di nuovo come
-dispositivo nuovo. Avvia l'installazione esistente con `/launch` invece di
-`/installlaunch` e l'identità sopravvive.
+Un dispositivo cancellato dalla console conserva la node key sul server, e
+reinstallare azzera l'identità: l'app si registra di nuovo come dispositivo nuovo.
+Avvia l'installazione esistente con `/launch` invece di `/installlaunch` e
+l'identità sopravvive.
+
+</details>
+
+<details>
+<summary><strong>Il pulsante VPN dice che il telefono non ha l'interop, ma ce l'ha</strong></summary>
+<br>
+
+Quel messaggio parla dei canali verso il registro, non del telefono. La sandbox
+dell'app non può scrivere `HKLM` nemmeno con l'interop unlock, quindi il percorso
+automatico ha bisogno di CMD Injector e del suo servizio telnet su `127.0.0.1:23`.
+Installa o avvia CMD Injector e riprova. In `registro.log`, la riga `vpn: canale
+telnet ... verificato` significa che il canale c'è; `vpn: telnet non disponibile`
+significa che CMD Injector manca o non ascolta.
 
 </details>
 
 ## Buone a sapersi
 
 - Tutto ciò che compila il telefono è C# 5: `LangVersion 5` è impostato su entrambe
-  le build, così una sintassi che il compilatore del telefono rifiuta fallisce anche
-  sul PC.
+  le build, così una sintassi che il compilatore del telefono rifiuta fallisce
+  anche sul PC.
 - I test girano offline e senza un account Tailscale, perché tutto ciò che tocca la
   rete o il caso è iniettato (`IRandomSource`, `IStreamConnector`, `IHttpFetcher`,
   `Sleep`).
-- Il pin del protocollo è fatto rispettare, non solo scritto:
-  `tools/check-protocol-pin.py` confronta `ProtocolConstants` con i sorgenti pinnati
-  di `tailscale` e `wireguard-go` (revisioni in `tools/refs.lock`, scaricate in
-  `refs/` da `tools/fetch-refs.py`). Se codice e sorgente divergono, il gate fallisce.
+- Il pin del protocollo ha un gate suo:
+  `tools/check-protocol-pin.py` confronta `ProtocolConstants` con i sorgenti
+  pinnati di `tailscale` e `wireguard-go` (revisioni in `tools/refs.lock`,
+  scaricate in `refs/` da `tools/fetch-refs.py`). Se codice e sorgente divergono,
+  il gate fallisce.
 - I documenti di piano stanno in `docs/`, che non è committato in git. Su GitHub ci
   sono il codice, le skill degli agent e questo README.
 
 ## Sicurezza
 
-- Nessuna chiave privata finisce nel registro o viene stampata: la CLI mostra solo
-  chiavi pubbliche e un test controlla che il suo output non contenga materiale
+- Nessuna chiave privata finisce nel registro o a schermo. La CLI mostra solo
+  chiavi pubbliche, e un test controlla che il suo output non contenga materiale
   segreto.
 - L'handshake è autenticato: il manifest del server verifica contro la chiave che
-  pubblica in `/key`, quindi un proxy in mezzo non può impersonare il control server.
-  Il primo messaggio in chiaro sulla porta 80 non indebolisce nulla.
-- TLS 1.2 è richiesto esplicitamente, perché .NET 4.5 negozia TLS 1.0 e il server lo
-  rifiuta.
-- Le chiavi private sul telefono stanno nel `PasswordVault`. Il deposito che lo fa è
-  previsto dal piano, non è scritto.
+  pubblica in `/key`, quindi un proxy in mezzo non può impersonare il control
+  server. Il primo messaggio in chiaro sulla porta 80 non indebolisce nulla.
+- TLS 1.2 è richiesto esplicitamente, perché .NET 4.5 negozia TLS 1.0 e il server
+  lo rifiuta.
+- Le chiavi private sul telefono stanno nel `PasswordVault`. Il deposito che lo fa
+  è previsto, non è scritto.
 
 ## Licenza
 
